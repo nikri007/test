@@ -26,7 +26,8 @@ How the replays work (the reel's sim.py, same algorithm, same random draws):
      the current price. The stop is checked before the target in every bar,
      so a bar that touches both counts as the stop (the conservative call).
   4. Outcomes: "target" or "stop" (whichever was touched first), or "neither"
-     when the trade is still open at --until (default 15:30, the close).
+     when the trade is still open at --until (default: the plan's flat_by,
+     15:15, or the 15:30 close when the plan has none).
      "green" = target first, or above the entry at --until (below for a sell).
      R = the target's R at the target, -1 at the stop, otherwise
      (price at --until - entry) / risk. A gap through the stop still counts
@@ -300,16 +301,18 @@ def split_sessions(bars):
     return days
 
 
-def full_sessions(days, before):
-    """Full sessions (all 75 bars) strictly before the plan's date, oldest first,
-    and the short ones that were left out (half days, gaps)."""
+def full_sessions(days, before, n=SESSION_BARS):
+    """Full sessions (every bar from the open through bar n-1, the last one the replay
+    uses) strictly before the plan's date, oldest first, and the short ones that were
+    left out (half days, gaps). Yahoo's NSE data always has an empty 15:20 bar, so
+    a replay that ends at the 15:15 flat-by only needs the bars before it."""
     full, short = [], []
     for d in sorted(days):
         if d >= before:
             continue
         s = days[d]
-        if len(s) == SESSION_BARS:
-            full.append((d, [s[i] for i in range(SESSION_BARS)]))
+        if all(i in s for i in range(n)):
+            full.append((d, [s[i] for i in range(n)]))
         else:
             short.append({"date": d, "bars": len(s)})
     return full, short
@@ -319,9 +322,10 @@ def full_sessions(days, before):
 
 def build_pool(sessions):
     """pool[i] = every past session's bar i as (o, h, l, c) / bar i-1's close, in date order."""
-    pool = [[] for _ in range(SESSION_BARS)]
+    n = len(sessions[0][1]) if sessions else SESSION_BARS
+    pool = [[] for _ in range(n)]
     for _, D in sessions:
-        for i in range(1, SESSION_BARS):
+        for i in range(1, n):
             pc = D[i - 1]["c"]
             pool[i].append((D[i]["o"] / pc, D[i]["h"] / pc, D[i]["l"] / pc, D[i]["c"] / pc))
     return pool
@@ -338,7 +342,7 @@ def simulate(pool, entry, stop, target, k, last, replays=10000, seed=19, window=
     r_target = round(((target - entry) if long else (entry - target)) / risk, 4)
 
     def slot(rng, i):
-        return i if window == 0 else min(SESSION_BARS - 1, max(1, i + rng.randint(-window, window)))
+        return i if window == 0 else min(len(pool) - 1, max(1, i + rng.randint(-window, window)))
 
     rng = random.Random(seed)
     choice = rng.choice
@@ -681,6 +685,8 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     k = plan["entry_bar"]
     early = plan["date"] in NYSE_EARLY_CLOSE
     end_min = EARLY_MIN if early else CLOSE_MIN
+    if until is None and plan.get("flat_by"):
+        until = plan["flat_by"]           # out by the plan's flat-by (15:15), not the 15:30 close
     until_min = end_min if until is None else parse_clock(until, "--until")
     if (until_min - OPEN_MIN) % 5 or until_min > end_min:
         raise TMError("--until must be on the 5-minute grid and no later than %s%s"
@@ -701,7 +707,7 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     if not eb["l"] - 0.01 <= plan["entry"] <= eb["h"] + 0.01:
         warn.append("the plan's entry %.2f is outside that bar's range %.2f to %.2f"
                     % (plan["entry"], eb["l"], eb["h"]))
-    sessions, short = full_sessions(days, plan["date"])
+    sessions, short = full_sessions(days, plan["date"], last + 1)
     if len(sessions) < MIN_SESSIONS:
         raise TMError("only %d full session(s) of %s before %s in the data; the time machine needs at least %d"
                       % (len(sessions), sym, plan["date"], MIN_SESSIONS))
@@ -913,7 +919,7 @@ def main(argv=None):
         p.add_argument("--replays", type=int, default=10000)
         p.add_argument("--seed", type=int, default=19)
         p.add_argument("--window", type=int, default=2, help="draw from the same time of day +- this many bars")
-        p.add_argument("--until", help="end each replay at this time (default 15:30, the close)")
+        p.add_argument("--until", help="end each replay at this time (default: the plan's flat_by, else 15:30)")
         p.add_argument("--offline", metavar="FILE", help="a saved Yahoo chart JSON (.json or .json.gz), no network")
         p.add_argument("--now", help='pretend it is this time ("2026-10-19 10:15" IST, or ISO with Z)')
 
