@@ -237,6 +237,15 @@ def business_days(today, n=5):
 
 # ---------------------------------------------------------------- files and helpers
 
+
+def inr_keys(cfg):
+    """Rupee names work too: max_loss_per_trade_inr is read as max_loss_per_trade_usd, and so on."""
+    for k in list(cfg or {}):
+        if k.endswith("_inr"):
+            cfg[k[:-4] + "_usd"] = cfg[k]
+    return cfg
+
+
 def read_json(path, what, required=True):
     if not path or not os.path.exists(path):
         if required:
@@ -264,7 +273,7 @@ def _f(x):
 
 
 def money(x):
-    return "$" + "{:,.2f}".format(float(x)).replace(".00", "")
+    return "₹" + "{:,.2f}".format(float(x)).replace(".00", "")
 
 
 def _cent(x):
@@ -768,7 +777,7 @@ def main(argv=None):
         orders = doc.get("orders", doc) if isinstance(doc, dict) else doc
         if not isinstance(orders, list) or not orders:
             raise RiskError("no orders in %s" % a.orders)
-        cfg = read_json(a.config, "config", required=False) or {}
+        cfg = inr_keys(read_json(a.config, "config", required=False) or {})
         portfolio = read_json(a.portfolio, "portfolio", required=False)
         pdoc = read_json(a.prices, "prices", required=False) or {}
         prices, times = load_prices(pdoc)

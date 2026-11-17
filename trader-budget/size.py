@@ -43,7 +43,7 @@ list of stocks by weight.
                    anything over the cap is shared out to the others by
                    weight, again and again until nobody is over
   4. min order     a slice under min_order_usd is dropped and its weight
-                   shared out, so you never place a $2 order
+                   shared out, so you never place a ₹2 order
   5. rounding      whole dollars by default (--cents for cents); the rounding
                    dollar goes to the biggest position that is not capped
   6. whole shares  with --whole-shares or "fractional": false; needs prices
@@ -160,7 +160,15 @@ def read_json(path, what):
 def load_config(path):
     cfg = dict(DEFAULTS)
     if path and os.path.exists(path):
-        cfg.update(read_json(path, "config"))
+        cfg.update(inr_keys(read_json(path, "config")))
+    return cfg
+
+
+def inr_keys(cfg):
+    """Rupee names work too: max_loss_per_trade_inr is read as max_loss_per_trade_usd, and so on."""
+    for k in list(cfg or {}):
+        if k.endswith("_inr"):
+            cfg[k[:-4] + "_usd"] = cfg[k]
     return cfg
 
 
@@ -286,8 +294,8 @@ def _num(x):
 def money(x):
     x = float(x)
     if abs(x - round(x)) < 0.005:
-        return "$" + "{:,.0f}".format(round(x))
-    return "$" + "{:,.2f}".format(x)
+        return "₹" + "{:,.0f}".format(round(x))
+    return "₹" + "{:,.2f}".format(x)
 
 
 # ---------------------------------------------------------------- plan mode (the default)
@@ -641,10 +649,10 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
             break
         worst = min(small, key=lambda r: (r["source_weight"], r["ticker"]))
         if whole and shares is not None and shares[worst["ticker"]] == 0 and prices.get(worst["ticker"], 0) > 0:
-            reason = ("one share costs $%s, more than its slice; it cannot be bought in whole shares"
+            reason = ("one share costs ₹%s, more than its slice; it cannot be bought in whole shares"
                       % _num(prices[worst["ticker"]]))
         else:
-            reason = "its slice ($%s) is under your $%s minimum order" % (
+            reason = "its slice (₹%s) is under your ₹%s minimum order" % (
                 _num(dollars[worst["ticker"]]), _num(min_order))
         dropped.append({"ticker": worst["ticker"], "reason": reason})
         keep = [r for r in keep if r["ticker"] != worst["ticker"]]

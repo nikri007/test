@@ -9,7 +9,7 @@ description: >-
   trader/orders.json in the exact shape of Alpaca's place_stock_order. A stop
   too far away for your max loss is a plain refusal, not a smaller order.
   Nothing is placed. Use when the user says "how many shares", "size this
-  trade", "how much should I buy", "I have $5,000", "I only want to risk $50
+  trade", "how much should I buy", "I have ₹1,00,000", "I only want to risk ₹500
   a trade", "set my rules", "keep 10% in cash", or after /trader-exit writes
   a plan.
 argument-hint: "[budget in dollars]"
@@ -54,10 +54,11 @@ If `trader/config.json` does not exist, copy `config.example.json` into
 
 - **budget**: how much money this is for. Only money they can afford to lose.
 - **cash_buffer_pct**: how much always stays in cash (default 10).
-- **max_loss_per_trade_usd**: the most one trade may lose if the stop fills at the stop (default 50).
-- **max_position_pct**, **max_order_usd**, **min_order_usd**: the biggest position (75% of the
-  budget), the biggest order ($4,000) and the smallest order ($5).
-- The day limits trader-risk enforces: **max_daily_loss_usd** (150), **max_trades_per_day** (3),
+- Amounts are in rupees (INR). The older `_usd` key names still work.
+- **max_loss_per_trade_inr**: the most one trade may lose if the stop fills at the stop (default 50).
+- **max_position_pct**, **max_order_inr**, **min_order_inr**: the biggest position (75% of the
+  budget), the biggest order (₹4,000) and the smallest order (₹5).
+- The day limits trader-risk enforces: **max_daily_loss_inr** (150), **max_trades_per_day** (3),
   **min_reward_risk** (1.0), **require_stop** (true), **no_entries_before** / **no_entries_after**
   ("09:45" / "15:30") and **flat_by** ("15:15"), all India time (IST).
 - **blocked**: tickers they never want to trade.
@@ -74,9 +75,9 @@ the smallest of four limits:
 
 | limit | shares |
 | --- | --- |
-| max loss | `max_loss_per_trade_usd` / risk a share (entry minus stop) |
+| max loss | `max_loss_per_trade_inr` / risk a share (entry minus stop) |
 | position cap | budget x `max_position_pct` / entry |
-| max order | `max_order_usd` / entry |
+| max order | `max_order_inr` / entry |
 | cash | (budget minus the cash buffer) / entry, never more than the cash in `trader/portfolio.json` |
 
 The entry it sizes at: the limit price with `--limit`. For a market order, the
