@@ -256,7 +256,7 @@ def to_yahoo(sym):
 
 def spark_path(symbols, rng, interval):
     return "/v7/finance/spark?symbols=%s&range=%s&interval=%s" % (
-        ",".join(to_yahoo(s) for s in symbols), rng, interval)
+        ",".join(to_yahoo(s).replace("&", "%26") for s in symbols), rng, interval)   # M&M.NS
 
 
 def chart_path(sym, rng, interval):
