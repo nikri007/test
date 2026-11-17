@@ -34,7 +34,7 @@ python3 "${CLAUDE_SKILL_DIR}/size.py" --limit 364.00 --json  # a limit order at 
 python3 "${CLAUDE_SKILL_DIR}/size.py" --weights AAPL=40,KO=60 --config split.json   # weights mode, below
 ```
 
-`--now "2026-10-19 10:15"` pins the clock (New York time). A plan for
+`--now "2026-10-19 10:15"` pins the clock (IST). A plan for
 another day is refused: make a new one with trader-exit.
 
 ## What it reads and writes
@@ -59,7 +59,7 @@ If `trader/config.json` does not exist, copy `config.example.json` into
   budget), the biggest order ($4,000) and the smallest order ($5).
 - The day limits trader-risk enforces: **max_daily_loss_usd** (150), **max_trades_per_day** (3),
   **min_reward_risk** (1.0), **require_stop** (true), **no_entries_before** / **no_entries_after**
-  ("09:45" / "15:30") and **flat_by** ("15:55"), all New York time.
+  ("09:45" / "15:30") and **flat_by** ("15:15"), all India time (IST).
 - **blocked**: tickers they never want to trade.
 - Keep **paper** true until they have watched it work on a paper account.
 

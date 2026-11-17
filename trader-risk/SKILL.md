@@ -32,7 +32,7 @@ keep each loss and each day's losses small. They do not make a trade win.
 python3 "${CLAUDE_SKILL_DIR}/check.py"                           # trader/ files; writes trader/state/risk.json
 python3 "${CLAUDE_SKILL_DIR}/check.py" --json
 python3 "${CLAUDE_SKILL_DIR}/check.py" --no-write                # look without recording
-python3 "${CLAUDE_SKILL_DIR}/check.py" --now "2026-10-19 10:15"  # pin the clock (New York time)
+python3 "${CLAUDE_SKILL_DIR}/check.py" --now "2026-10-19 10:15"  # pin the clock (IST)
 ```
 
 ## What it reads and writes
@@ -87,9 +87,9 @@ How the numbers work:
   used, and it says so.
 - **Daily loss** counts the full max loss of every entry placed today, win or
   lose, as trader-broker logged it. Three full-size trades use up a $150 day.
-- **The window** is New York time, worked out in the tool (daylight saving
-  included), never from the computer's clock zone. Weekends and NYSE holidays
-  are closed. On a 1:00 p.m. early close the window ends 3 hours earlier too.
+- **The window** is India time (IST, UTC+5:30), worked out in the tool, never
+  from the computer's clock zone. The session is 9:15 to 3:30; weekends and
+  NSE holidays are closed.
   Set both `no_entries_*` to null to switch the window off.
 - **pdt_guard** (off by default) counts a day trade as a symbol bought and
   sold on the same day in the log, plus any entry placed today (it is meant
