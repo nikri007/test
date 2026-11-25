@@ -73,6 +73,20 @@ or in the `SEC_USER_AGENT` environment variable.
 | `/trader-analyst` | Earnings Analyst | Reads earnings reports and sums up what changed. |
 | `/trader-pelosi` | Pelosi Tracker | Reads Congress's stock-trade disclosures the minute they are filed. |
 
+## Swing trades (NSE, 2 to 3 days)
+
+`trader-swing` is the India fork's main routine: one evening scan, one limit
+order for the next session, exits at +6%, a 12% safety stop or the close of
+day 3. The rule was chosen by a backtest on 495 NIFTY 500 stocks (2017 to
+2022) and checked on 2023 to 2026: about 6 trades in 10 won, about +0.9% a
+trade after costs, with flat years and losing streaks. Read
+`trader-swing/SKILL.md` before using it.
+
+```bash
+python3 trader-swing/swing.py scan      # after 3:45 PM IST: tomorrow's order
+python3 trader-swing/swing.py track     # how the recent orders stand
+```
+
 ## How to use it
 
 Everything lands in a `trader/` folder in your project, and each skill reads
