@@ -84,6 +84,12 @@ class Order(unittest.TestCase):
         self.assertAlmostEqual(od["loss_at_stop"], od["qty"] * od["limit_price"] * 0.14)
         self.assertEqual(pk.order(S, 299, 10.0)["qty"], 0)
 
+    def test_each_days_pick_gets_its_own_money(self):
+        cfg = {"budget": 10000, "cash_buffer_pct": 10, "max_position_pct": 75}
+        self.assertEqual(pk.pick_money(cfg), 7500.0)                       # no key: the swing position cap
+        self.assertEqual(pk.pick_money(dict(cfg, pick_per_day_inr=10000)), 10000.0)
+        self.assertEqual(pk.pick_money(dict(cfg, pick_per_day_inr=10000), budget=4000), 4000.0)
+
     def test_symbols_get_the_nse_suffix(self):
         self.assertEqual([pk.norm(x) for x in ("reliance", "M&M.NS", "tcs,")], ["RELIANCE.NS", "M&M.NS", "TCS.NS"])
 

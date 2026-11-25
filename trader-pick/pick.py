@@ -36,6 +36,8 @@ THE ORDER for a grade A stock:
   stop    4 x ATR under the buy price, never closer than 8% and never wider than 14%. Stops closer
           than that lost money in every test; the 14% cap keeps one loss near Rs 1,000 on Rs 7,500.
   time    sell at the close of the 5th session if neither was hit.
+  size    whole shares within "pick_per_day_inr" in trader/config.json (Rs 10,000 for each day's pick).
+          Picks overlap: with a 5-session hold up to 5 can be open together.
 
 WHAT THE TEST SAID about that order (grade A, after 0.33% costs, one trade):
     2017 to 2022 (used to choose)            2,134 trades  60% won  average +1.32%
@@ -247,6 +249,16 @@ def what_is_missing(S, i, g, mom, r, market_ok):
 
 # ---------------------------------------------------------------- commands
 
+def pick_money(cfg, budget=None):
+    """Rupees for one day's pick: --budget, else "pick_per_day_inr" in the config, else the swing position cap.
+    Each day's pick gets this much, so with a 5-session hold up to 5 picks can be open together."""
+    if budget:
+        return float(budget)
+    if cfg.get("pick_per_day_inr"):
+        return float(cfg["pick_per_day_inr"])
+    return sw.per_order(dict(cfg, swing_slots=1))[0]
+
+
 def norm(sym):
     s = sym.strip().upper().rstrip(",")
     return s if s.endswith(".NS") or s.startswith("^") else s + ".NS"
@@ -282,6 +294,16 @@ def load(symbols, now, rng="10y", offline=None, keep_today=False):
     return data, failed, last
 
 
+def journal_picks(path):
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh).get("picks", [])
+    except ValueError:
+        return []
+
+
 def order_block(sym, S, i, od, trade_day, exit_by, n=""):
     lv = od
     return [
@@ -302,7 +324,7 @@ def order_block(sym, S, i, od, trade_day, exit_by, n=""):
 def cmd_pick(a):
     now = sw.parse_now(a.now)
     cfg = sw.load_config(a.config)
-    money, _ = sw.per_order(dict(cfg, swing_slots=1), a.budget)
+    money = pick_money(cfg, a.budget)
     syms = []
     for s in a.symbols:
         for part in s.replace(",", " ").split():
@@ -382,6 +404,13 @@ def cmd_pick(a):
         pick["flags"] = fl["flags"]
         for x in fl["flags"]:
             out.append("   CHECK   " + x)
+        out.append("   TOTAL   %s for each day's pick: with a 5-session hold, up to %d picks can be open together, about %s"
+                   " in the market, and each can lose up to its stop." % (rupees(money), RULE["hold"], rupees(money * RULE["hold"])))
+        held = [p_ for p_ in journal_picks(a.journal) if p_["symbol"] == sym and p_["signal_day"] != last_day
+                and p_.get("exit_by", "") >= trade_day]
+        if held:
+            out.append("   NOTE    %s was also the pick on %s and that trade may still be open: a second order doubles the"
+                       " position in one stock." % (sym, held[-1]["signal_day"]))
         out.append("   ODDS    in the test about %d trades in 100 like this won and %d lost; winners averaged +%.1f%%, losers"
                    " -%.1f%%. No level is certain." % (ODDS["win"], ODDS["lose"], ODDS["avg_win"], ODDS["avg_loss"]))
         out.append("BEFORE YOU PLACE IT: run the news check in trader-swing/NEWS.md for %s over the 5-session hold"

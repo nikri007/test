@@ -87,7 +87,7 @@ gain. One pick a day at most.
 | Target | 2 x the 14-day ATR above the buy price, never under 4% or over 8% |
 | Stop | 4 x ATR under the buy price, never closer than 8% or wider than 14% |
 | Time | sell at the close of the 5th session |
-| Size | whole shares within the position cap in `trader/config.json` (75% of the budget) |
+| Size | whole shares within `pick_per_day_inr` in `trader/config.json` (Rs 10,000 for each day's pick) |
 
 Why a limit and not the open: on the same setups, buying the open always
 filled and averaged about +0.5 to +0.75% a trade; the limit 2% lower averaged
@@ -125,14 +125,16 @@ Winners average about +5.2%, losers about -4.5%.
   No trade is a result.
 - Never tighten the stop, raise the target or change the entry from the chat.
   A new rule is a new backtest.
-- One position at a time on a Rs 10,000 budget. If a pick is still open, say
-  so before giving a new order.
+- Rs 10,000 goes to each day's pick, so picks overlap: with a 5-session hold
+  up to 5 can be open together, about Rs 50,000 in the market. Say the total
+  in use when giving a new order, and warn if the pick is a stock already held.
 - Say "matched the tested setup", never "will go up".
 
 ## What it cannot promise
 
-- About 4 trades in 10 lose, and the loss at the stop can be near Rs 1,000 on
-  a Rs 7,500 position.
+- About 4 trades in 10 lose, and the loss at the stop can be up to Rs 1,400
+  on a Rs 10,000 pick. Five open picks that all hit their stops in a market
+  fall would lose about Rs 7,000.
 - The last year had only 48 trades and a thinner edge. The stocks tested are
   today's index members, which flatters the numbers.
 - Replayed as one small account over 9 years, a close cousin of this rule
