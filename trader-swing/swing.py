@@ -93,8 +93,9 @@ def yahoo_symbol(sym):
     return s if s.endswith(".NS") or s.startswith("^") else s.replace(".", "-")
 
 
-def fetch_chart(sym, rng):
-    path = "/v8/finance/chart/%s?range=%s&interval=1d" % (urllib.parse.quote(yahoo_symbol(sym), safe=".-^"), rng)
+def fetch_chart(sym, rng, events=False):
+    path = "/v8/finance/chart/%s?range=%s&interval=1d%s" % (urllib.parse.quote(yahoo_symbol(sym), safe=".-^"), rng,
+                                                           "&events=div%2Csplits" if events else "")
     err = None
     for attempt in range(2):
         for host in HOSTS:
@@ -722,7 +723,7 @@ def live_data(a, now, keep_today=False):
     else:
         syms = read_universe(a.universe)
         asked = len(syms)
-        raw = fetch_all(syms, "2y")
+        raw = fetch_all(syms + ["^NSEI"], "2y")
         data = {}
         for sym, doc in raw.items():
             try:
@@ -733,6 +734,52 @@ def live_data(a, now, keep_today=False):
         prepare(S)
         S["ix"] = {d: i for i, d in enumerate(S["d"])}
     return data, asked, last
+
+
+def actions_from_chart(doc, since_day):
+    """Dividends and splits dated on or after since_day in a Yahoo chart fetched with events.
+    -> ["dividend ₹5.50 a share, ex-date 2026-11-20", "split 1:5, ex-date ..."] (oldest first)."""
+    try:
+        ev = doc["chart"]["result"][0].get("events") or {}
+    except (KeyError, IndexError, TypeError):
+        return []
+    out = []
+    for e in (ev.get("dividends") or {}).values():
+        d = day_of(e.get("date", 0))
+        if d >= since_day and e.get("amount"):
+            out.append((d, "dividend %s a share, ex-date %s" % (rupees(float(e["amount"])), d)))
+    for e in (ev.get("splits") or {}).values():
+        d = day_of(e.get("date", 0))
+        if d >= since_day:
+            out.append((d, "split or bonus %s:%s, ex-date %s" % (e.get("denominator"), e.get("numerator"), d)))
+    return [t for _, t in sorted(out)]
+
+
+def data_flags(S, i, mkt, actions):
+    """Facts from the data alone that the news check must look at (see NEWS.md). Never a verdict."""
+    c = S["c"]
+    day, two = (c[i] / c[i - 1] - 1) * 100.0, (c[i] / c[i - 2] - 1) * 100.0
+    flags = []
+    if day <= -7.0:
+        flags.append("fell %.1f%% on the signal day: find out why before ordering" % -day)
+    if S["h"][i] > S["l"][i] and c[i] <= S["l"][i] * 1.001 and day <= -4.5:
+        flags.append("closed at the day's low after a %.1f%% fall: check for a lower circuit" % -day)
+    for a in actions:
+        flags.append("corporate action in the data: %s (the price drop may be the adjustment, not a dip)" % a)
+    if mkt and mkt.get("below200"):
+        flags.append("the NIFTY 50 is under its 200-day average: the rule's weak years (2018, 2022) looked like this")
+    return {"day_change": day, "two_day_change": two, "flags": flags}
+
+
+def market_line(data, day):
+    """The NIFTY 50 on `day`: its change and where it sits against its 200-day average."""
+    M = data.get("^NSEI")
+    i = (M or {}).get("ix", {}).get(day)
+    if M is None or i is None or i < 1:
+        return None
+    ch = (M["c"][i] / M["c"][i - 1] - 1) * 100.0
+    m200 = M["sma200"][i]
+    return {"close": M["c"][i], "change": ch, "below200": m200 is not None and M["c"][i] < m200}
 
 
 def follow(S, i, rule, live_day=None):
@@ -822,6 +869,11 @@ def replay(data, days, rule, rupees_per_order, slots, live_day=None):
 
 def order_lines(f, rule, n=None):
     lim, qty = f["limit"], f["qty"]
+    extra = []
+    if f.get("day_change") is not None:
+        extra.append("   Signal day %+.1f%%, two days %+.1f%%." % (f["day_change"], f["two_day_change"]))
+    for fl in f.get("flags", []):
+        extra.append("   CHECK: " + fl)
     tgt, stp = tick_down(lim * (1 + rule["target"] / 100.0)), tick_down(lim * (1 - rule["stop"] / 100.0))
     cost = qty * lim * COST_PCT / 100.0 + COST_FIXED
     return [
@@ -833,7 +885,7 @@ def order_lines(f, rule, n=None):
         " Sell at market by 3:20 PM." % (rupees(tgt), rule["target"], rupees(stp), rule["stop"], wd(f["exit_by"])),
         "   If it fills lower at the open, set both from your real buy price. Loss at the stop: about %s. Costs: about %s."
         % (rupees(qty * lim * rule["stop"] / 100.0), rupees(cost)),
-    ]
+    ] + extra
 
 
 STATUS_WORDS = {"waiting": "NOT FILLED SO FAR today (the order works until 3:30 PM)", "unfilled": "NOT FILLED (the low stayed above the limit): no trade", "target": "TARGET hit",
@@ -887,6 +939,17 @@ def cmd_scan(a, track_only=False):
     trade_day = next_session(last).isoformat()
     pending = [f for f in orders if f["signal_day"] == last_day]
     openp = [f for f in orders if f["status"] == "open"]
+    mkt = market_line(data, last_day)
+    since = session_days(last, 4)[0]
+    for f in pending if not track_only else []:
+        S = data[f["symbol"]]
+        acts = []
+        if not a.offline:
+            try:
+                acts = actions_from_chart(fetch_chart(f["symbol"], "3mo", events=True), since)
+            except SwingError:
+                acts = ["could not read corporate actions from Yahoo: check them by hand"]
+        f.update(data_flags(S, S["ix"][last_day], mkt, acts))
     out = []
     if not track_only:
         out.append("Swing scan, %s IST. Daily bars through %s." % (now.strftime("%a %Y-%m-%d %H:%M"), wd(last_day)))
@@ -895,6 +958,9 @@ def cmd_scan(a, track_only=False):
         if fresh < 0.8 * got:
             out.append("WARNING: only %d of %d charts have %s's bar yet. Yahoo may be late: run the scan again later."
                        % (fresh, got, wd(last_day)))
+        if mkt:
+            out.append("NIFTY 50 closed %s (%+.2f%% on the day), %s its 200-day average."
+                       % ("{:,.2f}".format(mkt["close"]), mkt["change"], "BELOW" if mkt["below200"] else "above"))
         out.append("Model portfolio: %s to use on one order, %d position%s at a time (budget %s)."
                    % (rupees(money), slots, "" if slots == 1 else "s", rupees(a.budget or cfg["budget"])))
         out.append("")
@@ -915,6 +981,9 @@ def cmd_scan(a, track_only=False):
             out.append("Also matched, not ordered (%s): %s" % (
                 "no free slot" if not pending else "one order per free slot",
                 ", ".join("%s %s" % (sym, rupees(data[sym]["c"][i])) for sc, sym, i in rest)))
+        if pending:
+            out.append("BEFORE YOU PLACE IT: run the news check in NEWS.md (results dates, corporate actions, fraud or"
+                       " regulatory news, market events). This scan reads prices only.")
         out.append("")
     else:
         out.append("Swing tracker, %s IST. Bars through %s%s." % (
@@ -939,6 +1008,7 @@ def cmd_scan(a, track_only=False):
                " unknown. In backtests about 4 trades in 10 lost. Nothing was placed. Not financial advice.")
     doc = {"created_by": "trader-swing", "created_at": now.strftime("%Y-%m-%dT%H:%M:%S+05:30"), "rule": rule,
            "signal_day": last_day, "trade_day": trade_day, "per_order_inr": money, "slots": slots,
+           "market": mkt,
            "matched": [{"symbol": sym, "close": data[sym]["c"][i], "ret63": sc, "rsi2": data[sym]["rsi2"][i]}
                        for sc, sym, i in today],
            "orders": [{k: v for k, v in f.items() if k != "score"} for f in orders]}

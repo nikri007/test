@@ -113,6 +113,28 @@ class Account(unittest.TestCase):
         self.assertAlmostEqual(ac["end"], 10000 + 150 * 50 * 0.02 - 10)
 
 
+class DataFlags(unittest.TestCase):
+    def test_actions_from_a_chart_with_events(self):
+        ts = lambda d: int((datetime.datetime.fromisoformat(d + "T03:45:00") - datetime.datetime(1970, 1, 1)).total_seconds())
+        doc = {"chart": {"result": [{"events": {
+            "dividends": {"1": {"amount": 5.5, "date": ts("2026-11-20")}, "2": {"amount": 4.0, "date": ts("2026-08-01")}},
+            "splits": {"3": {"numerator": 5, "denominator": 1, "date": ts("2026-11-23")}}}}]}}
+        self.assertEqual(sw.actions_from_chart(doc, "2026-11-18"),
+                         ["dividend ₹5.50 a share, ex-date 2026-11-20", "split or bonus 1:5, ex-date 2026-11-23"])
+        self.assertEqual(sw.actions_from_chart({"chart": {"result": [{}]}}, "2026-11-18"), [])
+        self.assertEqual(sw.actions_from_chart({}, "2026-11-18"), [])
+
+    def test_flags_are_facts_from_the_data(self):
+        S = series([FLAT, FLAT, (100, 100, 92, 92)])
+        f = sw.data_flags(S, 2, {"below200": True}, ["dividend ₹5 a share, ex-date 2026-01-03"])
+        self.assertAlmostEqual(f["day_change"], -8.0)
+        text = " | ".join(f["flags"])
+        for want in ("fell 8.0% on the signal day", "lower circuit", "corporate action in the data", "200-day average"):
+            self.assertIn(want, text)
+        calm = sw.data_flags(series([FLAT, FLAT, (100, 100.5, 98.5, 99)]), 2, {"below200": False}, [])
+        self.assertEqual(calm["flags"], [])
+
+
 class Calendar(unittest.TestCase):
     def test_sessions_skip_weekends_and_nse_holidays(self):
         D = datetime.date

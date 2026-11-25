@@ -85,6 +85,18 @@ What did not work, on the same data:
 - The 12% stop is a safety net, not a tight stop. With Rs 7,500 in one stock
   the loss at the stop is about Rs 900. Size the budget to that.
 
+## The news check
+
+The scan reads prices only. Before an order goes to the user, run the check in
+`NEWS.md` (same folder) and put its verdict above the order: CLEAR, CAUTION or
+SKIP. It looks at the scan's own `CHECK:` lines (a dividend or split in the
+data, a fall of 7% or more, the NIFTY under its 200-day average), then the
+company's news for the last 5 days (results or a board meeting inside the
+3-session hold, corporate actions, fraud or regulatory news), then market
+events inside the hold (Budget, RBI policy, election results). News can stop
+or flag a trade. It can never add one, pick another stock, or change a price.
+It was not part of the backtest.
+
 ## Files
 
 | file | what |
@@ -98,13 +110,15 @@ What did not work, on the same data:
 1. After 3:45 PM IST on a trading day: `swing.py scan`. Tell the user the
    counts (charts fetched, with today's bar, matched) and the order: symbol,
    limit price, shares, the +6% sell, the 12% stop, the last day.
-2. The user places the limit buy themselves (after-market order, or before
+2. Run the news check in `NEWS.md` on the order (and on each open position)
+   and print its verdict. On SKIP there is no order that session.
+3. The user places the limit buy themselves (after-market order, or before
    9:15 AM), for that one session. If it fills, they place the two exits as
    GTT orders. If it does not fill by 3:30 PM, it is cancelled.
-3. Any time: `swing.py track` (or `--live` in the session) shows each recent
+4. Any time: `swing.py track` (or `--live` in the session) shows each recent
    order: not filled, open (day 1, 2 or 3), target, stop or time exit, with
    the result after costs. On day 3 remind them to sell by 3:20 PM.
-4. The model portfolio assumes every order was placed. If the user skipped
+5. The model portfolio assumes every order was placed. If the user skipped
    one, their own record is the truth, not the model's.
 
 ## Rules
