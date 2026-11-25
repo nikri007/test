@@ -512,7 +512,7 @@ def cmd_pick(a):
                 out.append("NIFTY 500 scan: no other stock is a grade A setup today either.")
         except SwingError as e:
             out.append("NIFTY 500 scan skipped: %s" % e)
-    out.append("A chart reading is not a forecast. About 4 trades in 10 lose. Nothing was placed. Not financial advice.")
+    out.append("A chart reading is not a forecast. About 2 filled trades in 10 still lose. Nothing was placed. Not financial advice.")
     doc = {"created_by": "trader-pick", "created_at": now.strftime("%Y-%m-%dT%H:%M:%S+05:30"), "rule": RULE,
            "signal_day": last_day, "trade_day": trade_day, "per_order_inr": money, "market": mkt, "stocks": doc_rows,
            "pick": pick, "also_grade_a": [{"symbol": s, "close": c_, "limit": lp} for _, s, c_, lp in others]}
