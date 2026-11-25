@@ -87,6 +87,18 @@ python3 trader-swing/swing.py scan      # after 3:45 PM IST: tomorrow's order
 python3 trader-swing/swing.py track     # how the recent orders stand
 ```
 
+## Pick of the day (your own 3 to 5 stocks)
+
+`trader-pick` reads the chart of each stock you name (trend, momentum,
+pattern, candle, volume, levels) and says which one, if any, is a tested
+setup for a 3 to 5 day swing, with the entry, target, stop and the odds. Most
+evenings the answer is no trade. Read `trader-pick/SKILL.md`.
+
+```bash
+python3 trader-pick/pick.py pick RELIANCE TCS INFY   # after 3:45 PM IST
+python3 trader-pick/pick.py follow                   # how the picks stand
+```
+
 ## How to use it
 
 Everything lands in a `trader/` folder in your project, and each skill reads
