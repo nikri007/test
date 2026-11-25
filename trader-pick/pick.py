@@ -45,7 +45,9 @@ WHAT THE TEST SAID about that order (grade A, after 0.33% costs, one trade):
     Nov 2025 to Nov 2026 (looked at last)       48 trades  50% won  average +0.55%
 Winners average about +5.2%, losers about -4.5%. The last year had few trades (the market filter
 was on for most of it) and is too small a sample to lean on either way. About 4 trades in 10 lose. No level is certain:
-the target is the level reached first in a little under half of the filled trades.
+of the filled trades about 30% reached the target, about 4% the stop, and about 66% were sold at the
+day-5 close (a little under half of those in profit). Only about 1 order in 3 fills, so about 1 order
+in 9 ends at the target.
 
 The stocks tested are TODAY's index members (survivors), which flatters the numbers. Daily bars do
 not show the order of a day's high and low: a bar touching both counts as the stop. Past results do
