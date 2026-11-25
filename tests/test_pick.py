@@ -94,6 +94,57 @@ class Order(unittest.TestCase):
         self.assertEqual([pk.norm(x) for x in ("reliance", "M&M.NS", "tcs,")], ["RELIANCE.NS", "M&M.NS", "TCS.NS"])
 
 
+def bars(rows):
+    """(o, h, l, c) rows after a flat 100 close -> a prepared series; bar 0 is the signal bar."""
+    d0 = datetime.date(2026, 1, 1)
+    S = {"symbol": "TEST.NS", "d": [], "o": [], "h": [], "l": [], "c": [], "v": []}
+    for k, (o, h, l, c) in enumerate([(100, 100.5, 99.5, 100)] + rows):
+        S["d"].append((d0 + datetime.timedelta(days=k)).isoformat())
+        for key, x in zip("ohlc", (o, h, l, c)):
+            S[key].append(float(x))
+        S["v"].append(1e6)
+    return S
+
+
+LV = {"limit": 2.0, "target": 6.0, "stop": 10.0, "hold": 5}
+FILL = (100, 100, 97.5, 98)                                  # fills at 98.00
+QUIET = (98, 98.5, 97.5, 98)
+
+
+class Managed(unittest.TestCase):
+    def test_no_fill_and_waiting(self):
+        S = bars([(100, 101, 98.5, 100)])
+        self.assertEqual(pk.managed(S, 0, LV)["status"], "unfilled")
+        self.assertEqual(pk.managed(S, 0, LV, live_day=S["d"][1])["status"], "waiting")
+        self.assertEqual(pk.managed(bars([]), 0, LV)["status"], "pending")
+
+    def test_the_full_target_counts_on_day_2_only(self):
+        f = pk.managed(bars([(100, 105, 97.5, 98), (98, 104, 97.5, 103)]), 0, LV)     # 98 x 1.06 = 103.88
+        self.assertEqual((f["status"], f["day_no"], f["entry"]), ("target", 2, 98.0))
+        self.assertAlmostEqual(f["gross"], 6.0)
+        f = pk.managed(bars([(100, 105, 97.5, 98)]), 0, LV)                            # the buy day's high is not counted
+        self.assertEqual((f["status"], f["day_no"]), ("open", 1))
+        self.assertAlmostEqual(f["sell_now"], 98 * 1.06)
+
+    def test_from_day_3_the_sell_limit_is_the_fallback(self):
+        f = pk.managed(bars([FILL, QUIET, (98, 99.2, 97.6, 98.5)]), 0, LV)             # 98 x 1.01 = 98.98
+        self.assertEqual((f["status"], f["day_no"]), ("fallback", 3))
+        self.assertAlmostEqual(f["gross"], 1.0)
+        f = pk.managed(bars([FILL, QUIET]), 0, LV)                                    # after day 2 the next limit is +1%
+        self.assertAlmostEqual(f["sell_now"], 98 * 1.01)
+        f = pk.managed(bars([FILL, QUIET, (101, 102, 100, 101)]), 0, LV)               # a gap over the fallback: the open
+        self.assertEqual((f["status"], f["exit"]), ("fallback", 101.0))
+
+    def test_the_stop_counts_first_and_the_day_5_close_ends_it(self):
+        f = pk.managed(bars([FILL, (98, 104, 88, 99)]), 0, LV)                         # touched both: the stop
+        self.assertEqual((f["status"], round(f["gross"], 2)), ("stop", -10.0))
+        low = (97, 97.5, 96, 96.5)
+        S = bars([FILL, low, low, low, low])
+        f = pk.managed(S, 0, LV)
+        self.assertEqual((f["status"], f["day_no"], f["exit"]), ("time", 5, 96.5))
+        self.assertEqual(pk.managed(S, 0, LV, live_day=S["d"][5])["status"], "open")   # day 5 is not over
+
+
 class Chart(unittest.TestCase):
     def test_the_reading_names_the_trend_and_the_pattern(self):
         c = rising()
@@ -118,7 +169,7 @@ class Chart(unittest.TestCase):
         S = series(c)
         h = pk.history(S, len(c) - 1, None)
         self.assertGreater(h["signals"], 3)
-        self.assertEqual(h["filled"], h["target"] + h["stop"] + h["time"])
+        self.assertEqual(h["filled"], h["target"] + h["fallback"] + h["stop"] + h["time"])
         self.assertEqual(len(h["net"]), h["filled"])
 
 

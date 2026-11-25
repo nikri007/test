@@ -35,19 +35,24 @@ THE ORDER for a grade A stock:
           never under 4% and never over 8%
   stop    4 x ATR under the buy price, never closer than 8% and never wider than 14%. Stops closer
           than that lost money in every test; the 14% cap keeps one loss near Rs 1,000 on Rs 7,500.
-  time    sell at the close of the 5th session if neither was hit.
+  FALLBACK  if the target has not been reached by the close of day 2 (the buy day is day 1), move
+          the sell limit down to 1% above the buy price from day 3: a small profit instead of waiting.
+  time    sell at the close of the 5th session if nothing was hit.
   size    whole shares within "pick_per_day_inr" in trader/config.json (Rs 10,000 for each day's pick).
           Picks overlap: with a 5-session hold up to 5 can be open together.
 
 WHAT THE TEST SAID about that order (grade A, after 0.33% costs, one trade):
-    2017 to 2022 (used to choose)            2,134 trades  60% won  average +1.32%
-    2023 to Nov 2025 (not used to choose)    1,832 trades  57% won  average +0.98%
-    Nov 2025 to Nov 2026 (looked at last)       48 trades  50% won  average +0.55%
-Winners average about +5.2%, losers about -4.5%. The last year had few trades (the market filter
-was on for most of it) and is too small a sample to lean on either way. About 4 trades in 10 lose. No level is certain:
-of the filled trades about 30% reached the target, about 4% the stop, and about 66% were sold at the
-day-5 close (a little under half of those in profit). Only about 1 order in 3 fills, so about 1 order
-in 9 ends at the target.
+                                              trades  in profit  average  lost more than 3%
+    2017 to 2022 (used to choose)              2,134     81%     +1.32%        14%
+    2023 to Nov 2025 (not used to choose)      1,841     80%     +1.02%        15%
+    Nov 2025 to Nov 2026 (looked at last)         48     73%     +1.07%        13%
+Without the fallback the same trades averaged the same but only 57 to 60% ended in profit and 22 to
+23% lost more than 3%: the fallback turns many day-5 exits into small wins. It does not remove
+losses. About 2 trades in 10 still lose, about 1 in 11 loses more than 6%, a gap can jump the stop
+(the worst trade in the test lost 19%), and only about 1 order in 3 fills at all. Of the filled
+trades about 20% reached the full target on day 2, about 60% left through the +1% fallback, about
+3% hit the stop and about 17% were sold at the day-5 close. The last year had few trades (the
+market filter was on for most of it) and is too small a sample to lean on.
 
 The stocks tested are TODAY's index members (survivors), which flatters the numbers. Daily bars do
 not show the order of a day's high and low: a bar touching both counts as the stop. Past results do
@@ -79,8 +84,9 @@ sw = _load_swing()
 SwingError, rupees, wd = sw.SwingError, sw.rupees, sw.wd
 
 RULE = {"limit": 2.0, "target_atr": 2.0, "target_range": (4.0, 8.0), "stop_atr": 4.0, "stop_range": (8.0, 14.0),
-        "hold": 5, "market_filter": True}
-ODDS = {"win": 57, "lose": 43, "avg": 1.0, "avg_win": 5.2, "avg_loss": 4.5, "fill": 35}   # the test, grade A
+        "hold": 5, "fallback_day": 3, "fallback_pct": 1.0, "market_filter": True}
+ODDS = {"win": 80, "lose": 20, "avg": 1.0, "big_loss": 15, "fill": 35}   # the test, grade A, with the fallback
+CLOSED = ("target", "fallback", "stop", "time")
 JOURNAL = "trader/picks.json"
 
 
@@ -119,23 +125,77 @@ def order(S, i, money):
                 costs=qty * lim * sw.COST_PCT / 100.0 + sw.COST_FIXED)
 
 
+def sell_pct(day_no, lv):
+    """The sell limit on a day of the hold, in percent above the buy price: the full target on days 1
+    and 2, the fallback (+1%) from day 3."""
+    return lv["target"] if day_no < RULE["fallback_day"] else RULE["fallback_pct"]
+
+
+def managed(S, i, lv=None, live_day=None):
+    """The order from bar i's close, followed over the bars that exist, with the fallback exit.
+    status: "pending" (no bar for its session yet), "waiting" (its session is still running),
+    "unfilled", "open", "target" (the full target), "fallback" (the +1% exit from day 3), "stop",
+    "time" (the day-5 close). In a bar that touches the stop and the sell limit, the stop counts.
+    The sell limit is not counted on the buy day (the high may have come before the fill).
+    A trade over a data error (an unadjusted split) is "void"."""
+    lv = lv or levels(S, i)
+    o, h, l, c, d = S["o"], S["h"], S["l"], S["c"], S["d"]
+    lim = sw.tick_down(c[i] * (1 - lv["limit"] / 100.0))
+    r = {"limit": lim, "status": "pending", "entry": None, "exit": None, "exit_day": None, "day_no": 0,
+         "last_close": c[i], "gross": None}
+    e, hold = i + 1, lv["hold"]
+    if e >= len(c):
+        return r
+    if l[e] > lim * (1 - sw.FILL_THROUGH):
+        r["status"] = "waiting" if d[e] == live_day else "unfilled"
+        return r
+    entry = min(o[e], lim)
+    stp = entry * (1 - lv["stop"] / 100.0)
+    r.update(status="open", entry=entry, entry_day=d[e], stop=stp, target=entry * (1 + lv["target"] / 100.0))
+    for j in range(e, min(i + hold, len(c) - 1) + 1):
+        ratio = c[j] / c[j - 1]
+        if ratio < sw.BAD_MOVE[0] or ratio > sw.BAD_MOVE[1]:
+            r["status"] = "void"
+            return r
+        day_no = j - i
+        tgt = entry * (1 + sell_pct(day_no, lv) / 100.0)
+        kind = "target" if day_no < RULE["fallback_day"] else "fallback"
+        r["day_no"], r["last_close"] = day_no, c[j]
+        if j > e and o[j] <= stp:
+            r.update(status="stop", exit=o[j], exit_day=d[j])
+        elif j > e and o[j] >= tgt:
+            r.update(status=kind, exit=o[j], exit_day=d[j])
+        elif l[j] <= stp:
+            r.update(status="stop", exit=stp, exit_day=d[j])
+        elif j > e and h[j] >= tgt:
+            r.update(status=kind, exit=tgt, exit_day=d[j])
+        elif day_no == hold and d[j] != live_day:
+            r.update(status="time", exit=c[j], exit_day=d[j])
+        if r["exit"] is not None:
+            break
+    px = r["exit"] if r["exit"] is not None else r["last_close"]
+    r["gross"] = (px / entry - 1) * 100.0
+    if r["status"] == "open":                      # the sell limit for the next session of the hold
+        r["sell_now"] = entry * (1 + sell_pct(min(r["day_no"] + 1, hold), lv) / 100.0)
+    return r
+
+
 def history(S, upto, regime):
     """This stock's own past: every earlier grade A day, the same order, followed to its exit."""
-    out = {"signals": 0, "filled": 0, "won": 0, "target": 0, "stop": 0, "time": 0, "net": []}
+    out = {"signals": 0, "filled": 0, "won": 0, "target": 0, "fallback": 0, "stop": 0, "time": 0, "net": []}
     for i in range(sw.MIN_BARS, upto):
         if not sw.tradable(S, i) or (regime is not None and not regime.get(S["d"][i], False)):
             continue
         if grade(S, i)[0] != "A":
             continue
         out["signals"] += 1
-        lv = levels(S, i)
-        t = sw.trade(S, i, lv["target"], lv["stop"], lv["hold"], entry_mode="limit", limit=lv["limit"])
-        if t is None:
+        t = managed(S, i)
+        if t["status"] not in CLOSED:
             continue
-        net = t[0] - sw.COST_PCT
+        net = t["gross"] - sw.COST_PCT
         out["filled"] += 1
         out["won"] += net > 0
-        out[t[1]] += 1
+        out[t["status"]] += 1
         out["net"].append(net)
     out["avg"] = sum(out["net"]) / len(out["net"]) if out["net"] else None
     return out
@@ -317,6 +377,11 @@ def order_block(sym, S, i, od, trade_day, exit_by, n=""):
                                                                               lv["atr_pct"]),
         "   STOP    STOP-LOSS %s (-%.1f%%, a safety stop: closer stops lost money in the test). Place both as GTT orders"
         " once the buy fills." % (rupees(lv["stop_price"]), lv["stop"]),
+        "   FALLBACK  not at the target by the close of %s (day 2)? From %s (day 3) move the sell limit down to %s"
+        " (+%g%% of your buy price): a small profit instead of waiting. Keep the stop where it is."
+        % (wd(sw.next_session(datetime.date.fromisoformat(trade_day)).isoformat()),
+           wd(sw.next_session(datetime.date.fromisoformat(trade_day), 2).isoformat()),
+           rupees(sw.tick_down(lv["limit_price"] * (1 + RULE["fallback_pct"] / 100.0))), RULE["fallback_pct"]),
         "   TIME    still open on %s? Sell at market by 3:20 PM (day 5)." % wd(exit_by),
         "   MONEY   loss at the stop about %s; costs about %s a round trip. If it fills lower at the open, set target"
         " and stop from your real buy price." % (rupees(lv["loss_at_stop"]), rupees(lv["costs"])),
@@ -373,9 +438,9 @@ def cmd_pick(a):
         hist = history(S, i, regime)
         if hist["filled"]:
             out.append("  History   on this stock the setup came up %d times since %s; the order filled %d of them: %d won, "
-                       "average %+.2f%% after costs (target first %d, stop %d, time exit %d)."
+                       "average %+.2f%% after costs (full target %d, +1%% fallback %d, stop %d, day-5 close %d)."
                        % (hist["signals"], S["d"][0][:4], hist["filled"], hist["won"], hist["avg"], hist["target"],
-                          hist["stop"], hist["time"]))
+                          hist["fallback"], hist["stop"], hist["time"]))
         else:
             out.append("  History   the setup has %s on this stock since %s."
                        % ("never filled" if hist["signals"] else "never come up", S["d"][0][:4]))
@@ -413,8 +478,9 @@ def cmd_pick(a):
         if held:
             out.append("   NOTE    %s was also the pick on %s and that trade may still be open: a second order doubles the"
                        " position in one stock." % (sym, held[-1]["signal_day"]))
-        out.append("   ODDS    in the test about %d trades in 100 like this won and %d lost; winners averaged +%.1f%%, losers"
-                   " -%.1f%%. No level is certain." % (ODDS["win"], ODDS["lose"], ODDS["avg_win"], ODDS["avg_loss"]))
+        out.append("   ODDS    in the test, of 100 filled trades run this way about %d ended in profit (most through the"
+                   " fallback, about 20 at the full target) and %d lost; about %d lost more than 3%%. A loss is still possible."
+                   % (ODDS["win"], ODDS["lose"], ODDS["big_loss"]))
         out.append("BEFORE YOU PLACE IT: run the news check in trader-swing/NEWS.md for %s over the 5-session hold"
                    " (results dates, corporate actions, fraud or regulatory news, market events)." % sym)
     else:
@@ -467,27 +533,48 @@ def cmd_pick(a):
     return 0
 
 
+WORDS = {"waiting": "NOT FILLED SO FAR today (the order works until 3:30 PM)",
+         "unfilled": "NOT FILLED (the low stayed above the limit): no trade", "pending": "order for the next session",
+         "void": "data error on this chart (a split or bonus?): check your broker's prices",
+         "target": "TARGET hit", "fallback": "FALLBACK EXIT at +1%", "stop": "SAFETY STOP hit",
+         "time": "TIME EXIT at the day-5 close"}
+
+
 def follow_one(S, sym, signal_day, qty, live_day):
+    """-> (text, state) for one pick."""
     i = S["ix"].get(signal_day)
     if i is None:
         return "%s: no bar for the signal day %s" % (sym, signal_day), None
     lv = levels(S, i)
-    f = sw.follow(S, i, {"limit": lv["limit"], "target": lv["target"], "stop": lv["stop"], "hold": lv["hold"]}, live_day)
+    f = managed(S, i, lv, live_day)
     trade_day = sw.next_session(datetime.date.fromisoformat(signal_day)).isoformat()
-    exit_by = sw.next_session(datetime.date.fromisoformat(trade_day), lv["hold"] - 1).isoformat()
+    day = lambda n: sw.next_session(datetime.date.fromisoformat(trade_day), n - 1).isoformat() if n > 1 else trade_day
     q = qty or 1
-    f.update(symbol=sym, signal_day=signal_day, trade_day=trade_day, qty=q, exit_by=exit_by)
-    if f["status"] in ("open",) + sw.CLOSED:
-        f["net_pct"] = f["gross"] - sw.COST_PCT
-        f["pnl"] = q * f["entry"] * f["net_pct"] / 100.0 - sw.COST_FIXED
-    words = dict(sw.STATUS_WORDS, time="TIME EXIT at the day-5 close")
-    old = sw.STATUS_WORDS
-    sw.STATUS_WORDS = words
-    try:
-        line = sw.status_line(f, {"hold": lv["hold"], "target": lv["target"], "stop": lv["stop"]})
-    finally:
-        sw.STATUS_WORDS = old
-    return line, f
+    f.update(symbol=sym, signal_day=signal_day, trade_day=trade_day, qty=q, exit_by=day(lv["hold"]))
+    head = "%s  pick of %s, order for %s: limit %s x %d" % (sym, signal_day, wd(trade_day), rupees(f["limit"]), q)
+    st = f["status"]
+    if st in ("pending", "waiting", "unfilled", "void"):
+        return head + "\n   " + WORDS[st], f
+    f["net_pct"] = f["gross"] - sw.COST_PCT
+    f["pnl"] = q * f["entry"] * f["net_pct"] / 100.0 - sw.COST_FIXED
+    filled = "FILLED at %s on %s. " % (rupees(f["entry"]), wd(f["entry_day"]))
+    if st == "open":
+        n = f["day_no"]
+        text = "OPEN, day %d of %d, last close %s (%+.2f%% before costs). " % (n, lv["hold"], rupees(f["last_close"]), f["gross"])
+        if n >= lv["hold"] or (n == lv["hold"] - 1 and live_day is None):
+            text += ("LAST DAY is %s: keep the sell limit at %s and sell at market by 3:20 PM if it has not filled."
+                     % (wd(day(lv["hold"])), rupees(sw.tick_down(f["sell_now"]))))
+        elif n + 1 >= RULE["fallback_day"]:
+            text += ("FALLBACK is on: sell limit %s (+%g%% of the buy price) from %s. Stop %s. Last day %s."
+                     % (rupees(sw.tick_down(f["sell_now"])), RULE["fallback_pct"], wd(day(max(n + 1, RULE["fallback_day"]))),
+                        rupees(sw.tick_down(f["stop"])), wd(day(lv["hold"]))))
+        else:
+            text += ("Sell limit %s (the full target) through %s; from %s it drops to %s. Stop %s."
+                     % (rupees(sw.tick_down(f["target"])), wd(day(RULE["fallback_day"] - 1)), wd(day(RULE["fallback_day"])),
+                        rupees(sw.tick_down(f["entry"] * (1 + RULE["fallback_pct"] / 100.0))), rupees(sw.tick_down(f["stop"]))))
+        return head + "\n   " + filled + text, f
+    return head + "\n   " + filled + "%s on %s at %s: %+.2f%% after costs, %s" % (
+        WORDS[st], wd(f["exit_day"]), rupees(f["exit"]), f["net_pct"], rupees(f["pnl"], signed=True)), f
 
 
 def cmd_follow(a):
@@ -513,7 +600,7 @@ def cmd_follow(a):
             continue
         line, f = follow_one(data[sym], sym, day, qty, now.date().isoformat() if live else None)
         print("  " + line.replace("\n", "\n  "))
-        if f and f["status"] in sw.CLOSED:
+        if f and f["status"] in CLOSED:
             done.append(f)
     if done:
         print("Finished: %d trade%s, %d won, total %s after costs."

@@ -86,20 +86,37 @@ gain. One pick a day at most.
 | Entry | limit buy 2% under the close, good for the next session only. It fills about 1 time in 3 |
 | Target | 2 x the 14-day ATR above the buy price, never under 4% or over 8% |
 | Stop | 4 x ATR under the buy price, never closer than 8% or wider than 14% |
-| Time | sell at the close of the 5th session |
+| Fallback | not at the target by the close of day 2 (the buy day is day 1)? From day 3 move the sell limit down to 1% above the buy price |
+| Time | sell at the close of the 5th session if nothing was hit |
 | Size | whole shares within `pick_per_day_inr` in `trader/config.json` (Rs 10,000 for each day's pick) |
 
 Why a limit and not the open: on the same setups, buying the open always
 filled and averaged about +0.5 to +0.75% a trade; the limit 2% lower averaged
 about +1.3%. Why the stop is wide: stops of 3 to 8% turned the test negative.
 
-| period, grade A, this order, after costs | trades | won | average |
-| --- | --- | --- | --- |
-| 2017 to 2022 (used to choose) | 2,134 | 60% | +1.32% |
-| 2023 to Nov 2025 (not used to choose) | 1,832 | 57% | +0.98% |
-| Nov 2025 to Nov 2026 (looked at last) | 48 | 50% | +0.55% |
+| period, grade A, this order, after costs | trades | in profit | average | lost more than 3% |
+| --- | --- | --- | --- | --- |
+| 2017 to 2022 (used to choose) | 2,134 | 81% | +1.32% | 14% |
+| 2023 to Nov 2025 (not used to choose) | 1,841 | 80% | +1.02% | 15% |
+| Nov 2025 to Nov 2026 (looked at last) | 48 | 73% | +1.07% | 13% |
 
-Winners average about +5.2%, losers about -4.5%.
+## The fallback: a smaller profit instead of a loss
+
+A swing that has not reached its target by day 2 rarely does later. So from
+day 3 the sell limit drops to +1%: enough to cover costs and leave a little.
+On the same trades, without the fallback, the average was the same but only
+57 to 60% ended in profit and 22 to 23% lost more than 3%. With it, about
+80% end in profit and about 15% lose more than 3%.
+
+Of 100 filled trades: about 20 reach the full target on day 2, about 60 leave
+through the +1% fallback, about 3 hit the stop and about 17 are sold at the
+day-5 close. It does not remove losses: about 2 in 10 still lose, about 1 in
+11 loses more than 6%, and a gap can jump the stop (the worst trade in the
+test lost 19%).
+
+What the user does: on the evening of day 2, if the target has not filled,
+change the sell limit (GTT) to the fallback price the order printed. Keep the
+stop. `pick.py follow` says when the fallback is on and at what price.
 
 ## Steps
 
@@ -114,13 +131,16 @@ Winners average about +5.2%, losers about -4.5%.
 5. If there is no pick, say NO TRADE, say for each stock what is missing, and
    name the other grade A stocks the scan found, as stocks to read tomorrow,
    not as orders.
-6. On later days run `pick.py follow` and report fill, day N of 5, target,
-   stop or time exit, with the result after costs.
+6. On later days run `pick.py follow` and report fill, day N of 5, the sell
+   limit in force (full target or fallback), and any exit with the result
+   after costs. On the evening of day 2 remind the user to move the sell limit
+   to the fallback price.
 
 ## Rules
 
-- Never say a target or a profit is certain. Say the odds: about 57 in 100
-  won and 43 lost in the test.
+- Never say a target or a profit is certain, and never say the fallback means
+  "no loss". Say the odds: about 80 in 100 filled trades ended in profit and
+  20 lost in the test.
 - Never turn a WATCH or NO ORDER into an order because the user wants a trade.
   No trade is a result.
 - Never tighten the stop, raise the target or change the entry from the chat.
@@ -132,7 +152,7 @@ Winners average about +5.2%, losers about -4.5%.
 
 ## What it cannot promise
 
-- About 4 trades in 10 lose, and the loss at the stop can be up to Rs 1,400
+- About 2 trades in 10 lose even with the fallback, and the loss at the stop can be up to Rs 1,400
   on a Rs 10,000 pick. Five open picks that all hit their stops in a market
   fall would lose about Rs 7,000.
 - The last year had only 48 trades and a thinner edge. The stocks tested are
