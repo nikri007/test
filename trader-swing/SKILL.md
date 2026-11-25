@@ -29,6 +29,7 @@ next session, and follows that order to its exit. It never places an order.
 python3 "${CLAUDE_SKILL_DIR}/swing.py" scan                 # after 3:45 PM IST: the next session's order
 python3 "${CLAUDE_SKILL_DIR}/swing.py" track                # the recent orders and open positions
 python3 "${CLAUDE_SKILL_DIR}/swing.py" track --live         # during the session, with today's bar so far
+python3 "${CLAUDE_SKILL_DIR}/swing.py" review               # the model portfolio against the backtest
 python3 "${CLAUDE_SKILL_DIR}/swing.py" fetch --range 10y --data DIR
 python3 "${CLAUDE_SKILL_DIR}/swing.py" backtest --data DIR  # every setup and exit rule, train vs test
 ```
@@ -42,10 +43,12 @@ Flags: `--budget`, `--config trader/config.json`, `--now "2026-11-25 16:20"`
 | --- | --- |
 | Setup, at the close | up more than 20% over 63 sessions, close above the 50-day average, RSI(2) under 15 |
 | Filter | 20-day average traded value at least Rs 10 crore, price at least Rs 20, 210 bars of history |
+| Market filter | no new order on an evening when the NIFTY 50 closed under its 200-day average |
 | Rank | strongest 3-month gain first; one order per free slot |
 | Entry | limit buy 3% under the signal close, rounded down to Rs 0.05, good for the next session only |
 | Exits | limit sell 6% above the buy price; safety stop 12% under it; else the close of day 3 (buy day = day 1) |
 | Product | delivery (CNC), long only, no margin |
+| Stop-trading rule | 6 losing trades in a row: no orders for 10 sessions. Down 50% of the budget from the best point: stopped |
 
 ## Why this rule, and what the test said
 
@@ -68,6 +71,17 @@ What did not work, on the same data:
   the losers are bigger than the winners.
 - Tight stops (3 to 5%): they turned every setup into a loser.
 - The same limit buy on any liquid stock, without the setup: nothing.
+
+## One small account is not the average
+
+Replayed as one account (Rs 10,000, one position of up to Rs 7,500, every
+order placed, October 2017 to November 2026): 249 trades, 135 won, +Rs 7,890
+in total. 2018 lost Rs 3,012, 2022 lost Rs 3,225, and the worst fall from a
+peak was Rs 4,544. Choosing a different one of each evening's matches moved
+the 9-year total anywhere from +Rs 4,900 to +Rs 16,000. Over the same years
+the NIFTY 50 rose 157%: Rs 10,000 left in an index fund grew by about
+Rs 15,700 with no work. At this size the rule did not beat holding the index.
+Say this when the user asks what to expect.
 
 ## What it cannot promise
 
@@ -102,7 +116,7 @@ It was not part of the backtest.
 | file | what |
 | --- | --- |
 | `trader/universe.txt` | the symbols to scan, one `SYMBOL.NS\|Name` a line |
-| `trader/config.json` | `budget`, `cash_buffer_pct` (10), `max_position_pct` (75), `swing_slots` (1) |
+| `trader/config.json` | `budget`, `cash_buffer_pct` (10), `max_position_pct` (75), `swing_slots` (1), `swing_start` (the date the model portfolio starts counting from) |
 | `trader/swing.json` | written by `scan`: the rule, the matches, the orders and their status |
 
 ## Steps

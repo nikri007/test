@@ -14,7 +14,10 @@ THE RULE (long only, bought for delivery / CNC, never on margin):
   entry    a LIMIT BUY 3% under that close, good for the next session only. No fill, no trade.
   exits    a limit sell 6% above the buy price, or a safety stop-loss 12% under it, or the
            CLOSE of the 3rd session (the buy day is day 1), whichever comes first.
+  market   no new order on an evening when the NIFTY 50 closed under its 200-day average
   Signals are ranked by 3-month strength; the model portfolio places one order per free slot.
+  STOP-TRADING RULE: 6 losing trades in a row pause new orders for 10 sessions; a fall of 50% of
+  the budget from the model's best point stops it (worse than anything in 9 years of history).
 
 WHY THIS RULE: `swing.py backtest` tried 11 setups x 40 exit rules x 4 ways to enter on 495
 NIFTY 500 stocks, daily bars from Nov 2016. Rules were chosen on signals before 2023 only.
@@ -26,6 +29,16 @@ Buying the next OPEN instead of the limit made about 0% after costs for every se
 +2% target wins about 3 trades in 4 but earns less: the losers are bigger than the winners.
 Tight stops (3 to 5%) turned every setup into a loser. 2018, 2022 and 2025 were flat or
 slightly negative years. One account with one position is much noisier than these averages.
+
+ONE SMALL ACCOUNT IS NOT THE AVERAGE. Replayed as one account (Rs 10,000, one position of up to
+Rs 7,500, the market filter on, every order placed, Oct 2017 to Nov 2026): 249 trades, 135 won,
++Rs 7,890 in total. 2018 lost Rs 3,012 and 2022 lost Rs 3,225; the worst fall from a peak was
+Rs 4,544. Picking a different one of each evening's matches moved the 9-year total anywhere from
++Rs 4,900 to +Rs 16,000. Over the same years the NIFTY 50 rose 157%: Rs 10,000 left in an index
+fund grew by about Rs 15,700 with no work. At this size the rule did not beat simply holding the
+index. Smaller positions do worse (the fixed charge weighs more): Rs 5,000 a trade made +Rs 3,552.
+The market filter: with it, 2023 to 2026 made the same total on a quarter fewer trades with a
+smaller worst fall; the trades it removes averaged about zero with larger losses.
 
 HONEST LIMITS: the stocks are TODAY's index members (the ones that survived and grew), which
 flatters every number. Daily bars cannot show the order of the day's high and low: a bar that
@@ -67,7 +80,9 @@ MIN_PRICE = 20.0
 MIN_BARS = 210                   # 200-day average + a few
 BAD_MOVE = (0.6, 1.6)            # a close-to-close ratio outside this is a data error (an unadjusted split)
 SPLIT_DATE = "2023-01-01"        # signals before: train; from here on: test
-RULE = {"setup": "dipmom", "limit": 3.0, "target": 6.0, "stop": 12.0, "hold": 3}   # see the docstring
+RULE = {"setup": "dipmom", "limit": 3.0, "target": 6.0, "stop": 12.0, "hold": 3, "market_filter": True}
+GUARD = {"losses": 6, "pause_sessions": 10, "drawdown_pct": 50.0}   # the stop-trading rule, see the docstring
+BENCH = {"fill": 25.0, "win": 60.0, "avg": 1.0, "sd": 4.5}          # what the backtest showed, per trade, in percent
 TICK = 0.05
 CLOSE_READY = (15, 45)           # the day's bar counts as final from 3:45 PM IST
 NSE_HOLIDAYS = {                 # NSE equity segment, 2026 (NSE circulars NSE/CMTR/71775 and 72260)
@@ -682,7 +697,7 @@ def wd(day):
 
 
 def load_config(path):
-    cfg = {"budget": None, "cash_buffer_pct": 10, "max_position_pct": 75, "swing_slots": 1}
+    cfg = {"budget": None, "cash_buffer_pct": 10, "max_position_pct": 75, "swing_slots": 1, "swing_start": None}
     if path and os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
             try:
@@ -834,15 +849,60 @@ def candidates(data, day, rule):
     return out
 
 
-def replay(data, days, rule, rupees_per_order, slots, live_day=None):
+CLOSED = ("target", "stop", "time")
+
+
+def guard_state(orders, day, budget, guard):
+    """Where the stop-trading rule stands on the evening of `day`, from the trades finished by then.
+    -> {"streak", "pause_until", "stopped", "pnl", "drop", "closed", "wins", "worst_streak"}.
+    A pause starts at the 6th loss in a row and lasts 10 sessions; the count then starts again.
+    A fall of 50% of the budget from the best point so far stops the model for good. That line is
+    past the worst fall of the 9-year replay (45% of the budget, in 2018): crossing it means the rule
+    is not behaving as tested. It is not a comfort level: position size is what limits the risk."""
+    done = sorted((f for f in orders if f["status"] in CLOSED and f["exit_day"] <= day), key=lambda f: f["exit_day"])
+    st = {"streak": 0, "pause_until": None, "stopped": False, "pnl": 0.0, "drop": 0.0, "closed": len(done),
+          "wins": sum(1 for f in done if f["pnl"] > 0), "worst_streak": 0}
+    peak = run_ = 0.0
+    for f in done:
+        run_ += f["pnl"]
+        peak = max(peak, run_)
+        st["drop"] = max(st["drop"], peak - run_) if guard else st["drop"]
+        st["streak"] = st["streak"] + 1 if f["pnl"] <= 0 else 0
+        st["worst_streak"] = max(st["worst_streak"], st["streak"])
+        if guard and budget and peak - run_ >= budget * guard["drawdown_pct"] / 100.0:
+            st["stopped"] = True
+        if guard and st["streak"] >= guard["losses"]:
+            st["pause_until"] = next_session(datetime.date.fromisoformat(f["exit_day"]), guard["pause_sessions"]).isoformat()
+            st["streak"] = 0
+    st["pnl"] = run_
+    st["now_drop"] = peak - run_
+    return st
+
+
+def replay(data, days, rule, rupees_per_order, slots, live_day=None, budget=None, guard=None):
     """The model portfolio over `days` (signal days, oldest first), with no hindsight: each evening one
-    order per free slot for the best-ranked signals it can afford one share of. -> (orders, matched)
-    where matched = {signal day: [(score, symbol, index)]}."""
-    orders, matched, busy = [], {}, []           # busy: exit day of each open position (None = still open)
+    order per free slot for the best-ranked signals it can afford one share of. No orders on an evening
+    when the market filter is off (NIFTY 50 under its 200-day average) or the stop-trading rule is on.
+    -> (orders, matched, notes): matched = {signal day: [(score, symbol, index)]}, notes = {signal day:
+    why there was no order ("market", "paused until <day>", "stopped")}."""
+    orders, matched, notes, busy = [], {}, {}, []   # busy: exit day of each open position (None = still open)
     for day in days:
         cands = candidates(data, day, rule)
         matched[day] = cands
         trade_day = next_session(datetime.date.fromisoformat(day)).isoformat()
+        if guard:
+            g = guard_state(orders, day, budget, guard)
+            if g["stopped"]:
+                notes[day] = "stopped"
+                continue
+            if g["pause_until"] and trade_day <= g["pause_until"]:
+                notes[day] = "paused until %s" % g["pause_until"]
+                continue
+        if rule.get("market_filter"):
+            m = market_line(data, day)
+            if m and m["below200"]:
+                notes[day] = "market"
+                continue
         free = slots - len([x for x in busy if x is None or x >= trade_day])
         for sc, sym, i in cands:
             if free <= 0:
@@ -858,13 +918,13 @@ def replay(data, days, rule, rupees_per_order, slots, live_day=None):
                      exit_by=next_session(datetime.date.fromisoformat(trade_day), rule["hold"] - 1).isoformat())
             if f["status"] == "waiting":
                 busy.append(None)             # the order is working today: the slot is not free
-            if f["status"] in ("open", "target", "stop", "time"):
+            if f["status"] in ("open",) + CLOSED:
                 busy.append(f["exit_day"])
                 size = qty * f["entry"]
                 f["net_pct"] = f["gross"] - COST_PCT
                 f["pnl"] = size * f["net_pct"] / 100.0 - COST_FIXED
             orders.append(f)
-    return orders, matched
+    return orders, matched, notes
 
 
 def order_lines(f, rule, n=None):
@@ -921,20 +981,77 @@ def session_days(last, n):
     return out[::-1]
 
 
-def cmd_scan(a, track_only=False):
+def sessions_from(start, last, cap=250):
+    """Every session from date `start` to date `last`, oldest first, at most `cap` (the latest ones)."""
+    out, d = [], last
+    while d >= start and len(out) < cap:
+        if is_session(d):
+            out.append(d.isoformat())
+        d -= datetime.timedelta(days=1)
+    return out[::-1]
+
+
+def review_lines(orders, g, start, n_sessions, guard, budget):
+    """The model portfolio against what the backtest showed. Plain numbers and one plain verdict."""
+    placed = [f for f in orders if f["status"] not in ("pending", "waiting")]
+    filled = [f for f in placed if f["status"] != "unfilled"]
+    done = [f for f in placed if f["status"] in CLOSED]
+    out = ["Since %s (%d sessions): %d order%s placed, %d filled%s." % (
+        wd(start), n_sessions, len(placed), "" if len(placed) == 1 else "s", len(filled),
+        " (%.0f%%; the backtest filled about 1 in 4)" % (100.0 * len(filled) / len(placed)) if placed else "")]
+    if not done:
+        out.append("No finished trade yet: nothing to judge. Weeks without a fill are normal with this rule.")
+        return out
+    pct = [100.0 * f["pnl"] / (f["qty"] * f["entry"]) for f in done]
+    avg, n = sum(pct) / len(pct), len(done)
+    band = 2 * BENCH["sd"] / math.sqrt(n)
+    out.append("Finished trades: %d. Won %d (%.0f%%; the backtest won about 6 in 10). Total %s after all costs."
+               % (n, g["wins"], 100.0 * g["wins"] / n, rupees(g["pnl"], signed=True)))
+    out.append("Average %+.2f%% a trade after all costs (the backtest: about +0.9%% before the Rs 15 DP charge, "
+               "about +0.7%% after it at this size)." % avg)
+    out.append("Longest losing run %d (now %d; the rule pauses at %d). Down %s from the best point (the rule stops at %s)."
+               % (g["worst_streak"], g["streak"], guard["losses"], rupees(g["now_drop"]),
+                  rupees(budget * guard["drawdown_pct"] / 100.0)))
+    if n < 20:
+        out.append("VERDICT: too few trades to judge. With %d trades, an average anywhere from %+.1f%% to %+.1f%% is "
+                   "ordinary luck. Look again at 20 trades." % (n, 0.7 - band, 0.7 + band))
+    elif avg < 0.7 - band:
+        out.append("VERDICT: BELOW what the test showed, by more than luck explains (%d trades, average %+.2f%%). "
+                   "Do not put real money on it; if it is still under zero at 30 trades, stop using the rule." % (n, avg))
+    elif avg < 0:
+        out.append("VERDICT: losing so far, but still inside what luck explains over %d trades. Keep it on paper." % n)
+    else:
+        out.append("VERDICT: in line with the test so far (%d trades). That is not proof it will continue." % n)
+    return out
+
+
+def cmd_scan(a, mode="scan"):
+    track_only = mode != "scan"
     now = parse_now(a.now)
     cfg = load_config(a.config)
-    rule = dict(RULE)
+    rule, guard = dict(RULE), dict(GUARD)
     money, slots = per_order(cfg, a.budget)
-    live = track_only and a.live
+    budget = a.budget or cfg["budget"]
+    live = mode == "track" and a.live
     data, asked, last = live_data(a, now, keep_today=live)
     last_day = last.isoformat()
     got = len([s for s in data if not s.startswith("^")])
     fresh = len([s for s, S in data.items() if not s.startswith("^") and S["d"] and S["d"][-1] >= last_day])
     if not got:
         raise SwingError("no charts came back from Yahoo: try again in a few minutes")
-    days = session_days(last, a.days)
-    orders, matched = replay(data, days, rule, money, slots, now.date().isoformat() if live else None)
+    start = cfg.get("swing_start")
+    if start:
+        try:
+            days = sessions_from(datetime.date.fromisoformat(start), last)
+        except ValueError:
+            raise SwingError('"swing_start" in the config wants a date like 2026-11-23')
+        if not days:
+            raise SwingError("swing_start %s is after the last complete session %s" % (start, last_day))
+    else:
+        days = session_days(last, a.days)
+    orders, matched, notes = replay(data, days, rule, money, slots, now.date().isoformat() if live else None,
+                                    budget, guard)
+    g = guard_state(orders, last_day, budget, guard)
     today = matched[last_day]
     trade_day = next_session(last).isoformat()
     pending = [f for f in orders if f["signal_day"] == last_day]
@@ -951,25 +1068,38 @@ def cmd_scan(a, track_only=False):
                 acts = ["could not read corporate actions from Yahoo: check them by hand"]
         f.update(data_flags(S, S["ix"][last_day], mkt, acts))
     out = []
-    if not track_only:
+    nifty = ("NIFTY 50 closed %s (%+.2f%% on the day), %s its 200-day average."
+             % ("{:,.2f}".format(mkt["close"]), mkt["change"], "BELOW" if mkt["below200"] else "above")) if mkt else \
+        "NIFTY 50: no data, so the market filter was NOT checked today."
+    if mode == "scan":
         out.append("Swing scan, %s IST. Daily bars through %s." % (now.strftime("%a %Y-%m-%d %H:%M"), wd(last_day)))
         out.append("Fetched %d of %d charts; %d have %s's bar; %d matched the rule (strong stock, short dip)."
                    % (got, asked, fresh, wd(last_day), len(today)))
         if fresh < 0.8 * got:
             out.append("WARNING: only %d of %d charts have %s's bar yet. Yahoo may be late: run the scan again later."
                        % (fresh, got, wd(last_day)))
-        if mkt:
-            out.append("NIFTY 50 closed %s (%+.2f%% on the day), %s its 200-day average."
-                       % ("{:,.2f}".format(mkt["close"]), mkt["change"], "BELOW" if mkt["below200"] else "above"))
+        out.append(nifty)
         out.append("Model portfolio: %s to use on one order, %d position%s at a time (budget %s)."
-                   % (rupees(money), slots, "" if slots == 1 else "s", rupees(a.budget or cfg["budget"])))
+                   % (rupees(money), slots, "" if slots == 1 else "s", rupees(budget)))
         out.append("")
+        why = notes.get(last_day, "")
         if pending:
             when = ("today: place it now if you have not" if trade_day == now.date().isoformat()
                     else "place tonight as an after-market order, or before 9:15 AM")
             out.append("ORDER%s FOR %s (%s):" % ("S" if len(pending) > 1 else "", wd(trade_day), when))
             for n, f in enumerate(pending, 1):
                 out += order_lines(f, rule, n)
+        elif why == "market":
+            out.append("NO ORDER for %s: MARKET FILTER. The NIFTY 50 is under its 200-day average; in the backtest the "
+                       "rule made nothing in such markets and its losses were bigger. This can last weeks or months."
+                       % wd(trade_day))
+        elif why == "stopped":
+            out.append("NO ORDER: STOPPED. The model portfolio is down %s from its best point, past the %g%% limit (%s). "
+                       "Review the rule before any new trade; a new \"swing_start\" date in the config starts a fresh count."
+                       % (rupees(g["now_drop"]), guard["drawdown_pct"], rupees(budget * guard["drawdown_pct"] / 100.0)))
+        elif why.startswith("paused"):
+            out.append("NO ORDER for %s: PAUSED after %d losses in a row. Orders start again after %s."
+                       % (wd(trade_day), guard["losses"], wd(why.split()[-1])))
         elif openp:
             out.append("NO NEW ORDER for %s: the slot is in use (%s)." % (wd(trade_day), ", ".join(f["symbol"] for f in openp)))
         elif today:
@@ -979,36 +1109,57 @@ def cmd_scan(a, track_only=False):
         rest = [(sc, sym, i) for sc, sym, i in today if sym not in {f["symbol"] for f in pending}][:a.show]
         if rest:
             out.append("Also matched, not ordered (%s): %s" % (
-                "no free slot" if not pending else "one order per free slot",
+                "no order today" if not pending else "one order per free slot",
                 ", ".join("%s %s" % (sym, rupees(data[sym]["c"][i])) for sc, sym, i in rest)))
         if pending:
             out.append("BEFORE YOU PLACE IT: run the news check in NEWS.md (results dates, corporate actions, fraud or"
                        " regulatory news, market events). This scan reads prices only.")
         out.append("")
-    else:
+    elif mode == "track":
         out.append("Swing tracker, %s IST. Bars through %s%s." % (
             now.strftime("%a %Y-%m-%d %H:%M"), wd(max((S["d"][-1] for S in data.values() if S["d"]), default=last_day)),
             " (today's bar is not final)" if live else ""))
-    recent = [f for f in orders if f["status"] != "pending"]
+    else:
+        out.append("Swing review, %s IST. Daily bars through %s." % (now.strftime("%a %Y-%m-%d %H:%M"), wd(last_day)))
+        out.append(nifty)
+        out += review_lines(orders, g, days[0], len(days), guard, budget)
+        if g["stopped"]:
+            out.append("STATUS: STOPPED (down %g%% of the budget from the best point). No new orders until you review."
+                       % guard["drawdown_pct"])
+        elif g["pause_until"] and trade_day <= g["pause_until"]:
+            out.append("STATUS: PAUSED after %d losses in a row, until %s." % (guard["losses"], wd(g["pause_until"])))
+        quiet = sum(1 for d in days if notes.get(d) == "market")
+        if quiet:
+            out.append("Market filter: no orders on %d of %d evenings (NIFTY 50 under its 200-day average)." % (quiet, len(days)))
+        out.append("")
+    shown = set(session_days(last, a.days))
+    recent = [f for f in orders if f["status"] != "pending" and (f["signal_day"] in shown or f["status"] in ("open", "waiting"))]
     out.append("Model portfolio, orders of the last %d sessions (it assumes every order was placed):" % a.days)
     if not recent:
         out.append("  none")
     for f in recent:
         out.append("  " + status_line(f, rule).replace("\n", "\n  "))
-    done = [f for f in recent if f["status"] in ("target", "stop", "time")]
-    if done:
-        out.append("Finished: %d trade%s, %d won, total %s after costs. %d order%s did not fill."
-                   % (len(done), "" if len(done) == 1 else "s", sum(1 for f in done if f["pnl"] > 0),
-                      rupees(sum(f["pnl"] for f in done), signed=True),
-                      sum(1 for f in recent if f["status"] == "unfilled"),
-                      "" if sum(1 for f in recent if f["status"] == "unfilled") == 1 else "s"))
+    if mode != "review":
+        if start and g["closed"]:
+            out.append("Since %s: %d finished trade%s, %d won, total %s after costs. Losing run now %d (pause at %d)."
+                       % (wd(days[0]), g["closed"], "" if g["closed"] == 1 else "s", g["wins"], rupees(g["pnl"], signed=True),
+                          g["streak"], guard["losses"]))
+        elif not start:
+            done = [f for f in recent if f["status"] in CLOSED]
+            if done:
+                out.append("Finished: %d trade%s, %d won, total %s after costs."
+                           % (len(done), "" if len(done) == 1 else "s", sum(1 for f in done if f["pnl"] > 0),
+                              rupees(sum(f["pnl"] for f in done), signed=True)))
+    else:
+        out.append("The model assumes every order was placed and no order was skipped by the news check. Your own "
+                   "journal of what you really did is the record that counts.")
     if datetime.date.fromisoformat(trade_day).year not in CALENDAR_YEARS:
         out.append("The NSE holiday list covers %s only: check nseindia.com for %s." % (CALENDAR_YEARS[0], trade_day))
     out.append("Paper results from free daily bars: a real fill can be worse, and the order of a day's high and low is"
                " unknown. In backtests about 4 trades in 10 lost. Nothing was placed. Not financial advice.")
     doc = {"created_by": "trader-swing", "created_at": now.strftime("%Y-%m-%dT%H:%M:%S+05:30"), "rule": rule,
-           "signal_day": last_day, "trade_day": trade_day, "per_order_inr": money, "slots": slots,
-           "market": mkt,
+           "guard": dict(guard, state=g), "signal_day": last_day, "trade_day": trade_day, "per_order_inr": money,
+           "slots": slots, "market": mkt, "no_order_reason": notes.get(last_day),
            "matched": [{"symbol": sym, "close": data[sym]["c"][i], "ret63": sc, "rsi2": data[sym]["rsi2"][i]}
                        for sc, sym, i in today],
            "orders": [{k: v for k, v in f.items() if k != "score"} for f in orders]}
@@ -1016,7 +1167,7 @@ def cmd_scan(a, track_only=False):
         print(json.dumps(doc, indent=1, ensure_ascii=False))
     else:
         print("\n".join(out))
-    if not a.no_write and not track_only:
+    if not a.no_write and mode == "scan":
         os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
         with open(a.out, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=1, ensure_ascii=False)
@@ -1053,14 +1204,16 @@ def main(argv=None):
     p.add_argument("--years", action="store_true")
     p.add_argument("--account", action="store_true")
     for name, hlp in (("scan", "after the close: the next session's order"),
-                      ("track", "how the recent orders and open positions stand")):
+                      ("track", "how the recent orders and open positions stand"),
+                      ("review", "the model portfolio against what the backtest showed")):
         p = sub.add_parser(name, help=hlp)
         p.add_argument("--universe", default="trader/universe.txt")
         p.add_argument("--config", default="trader/config.json")
         p.add_argument("--budget", type=float)
         p.add_argument("--offline", metavar="DIR", help="saved daily bars (swing.py fetch) instead of Yahoo")
         p.add_argument("--now", help='pretend it is this IST time, e.g. "2026-11-25 16:20"')
-        p.add_argument("--days", type=int, default=12, help="sessions the model portfolio is replayed over")
+        p.add_argument("--days", type=int, default=20 if name == "review" else 12,
+                       help="sessions of orders to list (the model runs from swing_start when the config has one)")
         p.add_argument("--show", type=int, default=8)
         p.add_argument("--out", default="trader/swing.json")
         p.add_argument("--no-write", action="store_true")
@@ -1071,8 +1224,8 @@ def main(argv=None):
     try:
         if a.cmd == "scan":
             return cmd_scan(a)
-        if a.cmd == "track":
-            return cmd_scan(a, track_only=True)
+        if a.cmd in ("track", "review"):
+            return cmd_scan(a, mode=a.cmd)
         if a.cmd == "fetch":
             return cmd_fetch(a)
         if a.cmd == "backtest":

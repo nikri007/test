@@ -28,7 +28,8 @@ Read the `CHECK:` lines under the order and the NIFTY line.
 | corporate action in the data (dividend, split, bonus) dated on the signal day or the session before | SKIP: the fall may be the price adjustment, not a dip |
 | closed at the day's low after a fall of 4.5% or more | SKIP if step 2 confirms a lower circuit; else CAUTION |
 | fell 7% or more on the signal day | go to step 2 and find the reason; without a reason, CAUTION |
-| NIFTY 50 under its 200-day average | CAUTION (the rule's weak years looked like this) |
+| NIFTY 50 under its 200-day average | the scan gives no order at all (market filter): nothing to check |
+| "NIFTY 50: no data, so the market filter was NOT checked" | CAUTION: look up whether the NIFTY 50 is above its 200-day average; if it is not, SKIP |
 | could not read corporate actions | say "corporate actions not verified" |
 
 ## Step 2. The company (search the last 5 days of news)

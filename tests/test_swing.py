@@ -135,6 +135,41 @@ class DataFlags(unittest.TestCase):
         self.assertEqual(calm["flags"], [])
 
 
+class Guard(unittest.TestCase):
+    def tr(self, day, pnl):
+        return {"status": "time", "exit_day": day, "pnl": pnl, "qty": 10, "entry": 100.0}
+
+    def test_six_losses_pause_and_the_count_starts_again(self):
+        orders = [self.tr("2026-01-%02d" % d, -50.0) for d in (5, 6, 7, 8, 9, 12)]
+        g = sw.guard_state(orders, "2026-01-12", 10000.0, sw.GUARD)
+        self.assertEqual((g["streak"], g["worst_streak"], g["stopped"]), (0, 6, False))
+        self.assertEqual(g["pause_until"], sw.next_session(datetime.date(2026, 1, 12), 10).isoformat())
+        self.assertIsNone(sw.guard_state(orders, "2026-01-09", 10000.0, sw.GUARD)["pause_until"])   # five so far
+
+    def test_a_win_resets_the_run_and_a_deep_fall_stops(self):
+        orders = [self.tr("2026-01-05", -50.0), self.tr("2026-01-06", 80.0), self.tr("2026-01-07", -20.0)]
+        g = sw.guard_state(orders, "2026-01-07", 10000.0, sw.GUARD)
+        self.assertEqual((g["streak"], g["wins"], g["closed"], g["pnl"], g["now_drop"]), (1, 1, 3, 10.0, 20.0))
+        deep = [self.tr("2026-01-05", 1000.0), self.tr("2026-01-06", -6000.0)]
+        self.assertTrue(sw.guard_state(deep, "2026-01-06", 10000.0, sw.GUARD)["stopped"])
+        self.assertFalse(sw.guard_state(deep, "2026-01-05", 10000.0, sw.GUARD)["stopped"])
+
+    def test_the_review_is_careful_with_few_trades(self):
+        orders = [self.tr("2026-01-05", -50.0), self.tr("2026-01-06", 80.0)] + \
+                 [{"status": "unfilled", "qty": 1, "entry": None}] * 6
+        g = sw.guard_state(orders, "2026-01-06", 10000.0, sw.GUARD)
+        text = "\n".join(sw.review_lines(orders, g, "2026-01-01", 5, sw.GUARD, 10000.0))
+        self.assertIn("8 orders placed, 2 filled (25%", text)
+        self.assertIn("too few trades to judge", text)
+        none = "\n".join(sw.review_lines([], sw.guard_state([], "2026-01-06", 10000.0, sw.GUARD), "2026-01-01", 5, sw.GUARD, 10000.0))
+        self.assertIn("No finished trade yet", none)
+
+    def test_sessions_from_a_start_date(self):
+        D = datetime.date
+        self.assertEqual(sw.sessions_from(D(2026, 11, 20), D(2026, 11, 25)), ["2026-11-20", "2026-11-23", "2026-11-25"])
+        self.assertEqual(sw.sessions_from(D(2026, 11, 26), D(2026, 11, 25)), [])
+
+
 class Calendar(unittest.TestCase):
     def test_sessions_skip_weekends_and_nse_holidays(self):
         D = datetime.date
