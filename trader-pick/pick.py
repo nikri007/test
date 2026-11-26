@@ -4,6 +4,7 @@ if any, is worth an order for a 3 to 5 day swing. Standard library only (it load
 
     python3 pick.py pick RELIANCE TCS INFY            # after 3:45 PM IST: chart reading, the pick or NO TRADE
     python3 pick.py pick RELIANCE TCS --no-scan       # skip the list of setups in the whole universe
+    python3 pick.py scan                              # rate every setup in the universe; ALERT at 7/10 or better
     python3 pick.py follow                            # how the picks in trader/picks.json stand
     python3 pick.py follow EMCURE --signal-day 2026-11-23
 
@@ -27,6 +28,16 @@ So the chart reading is shown in full, but only one picture earns an order:
   GRADE B  the same shape, weaker (up more than 10%, RSI(2) under 25). WATCH only: it averaged about
            +0.5% a trade before 2025 and nothing in the last year.
   anything else: NO ORDER, with what would have to change.
+
+THE RATING of a grade A setup (out of 10) comes from how hard the stock fell on the signal day. The
+same order did better the deeper the dip, in every period (filled trades, after costs):
+    7/10  fell 7% or more     153 trades  90% in profit  48% at the full target  average +5.0%
+    6/10  fell 5 to 7%        308 trades  83%            16%                     average +1.9%
+    5/10  fell 3 to 5%      1,014 trades  82%            14%                     average +1.6%
+    4/10  fell under 3%     2,533 trades  79%             7%                     average +0.7%
+A 7 is rare (about 2 or 3 a month across 495 stocks) and a fall that sharp always has a reason: the
+rating is the chart's odds, and the news check decides whether the reason is one to stay away from.
+With several grade A stocks the pick is the best rated, then the strongest 3-month gain.
 
 THE ORDER for a grade A stock:
   entry   a LIMIT BUY 2% under today's close, good for the next session only (it fills about 1 time
@@ -88,6 +99,15 @@ RULE = {"limit": 2.0, "target_atr": 2.0, "target_range": (4.0, 8.0), "stop_atr":
 ODDS = {"win": 80, "lose": 20, "avg": 1.0, "big_loss": 15, "fill": 35}   # the test, grade A, with the fallback
 CLOSED = ("target", "fallback", "stop", "time")
 JOURNAL = "trader/picks.json"
+# The rating of a grade A setup, from how hard the stock fell on the signal day. Each row: rating, the
+# fall needed, and what filled trades in that band did in the test (2017 to Nov 2026, the rule with the
+# fallback, after 0.33% costs): how many, % in profit, % at the full target, the average.
+RATINGS = [
+    (7, -0.07, "fell 7% or more on the day", {"n": 153, "profit": 90, "target": 48, "avg": 5.0}),
+    (6, -0.05, "fell 5 to 7% on the day", {"n": 308, "profit": 83, "target": 16, "avg": 1.9}),
+    (5, -0.03, "fell 3 to 5% on the day", {"n": 1014, "profit": 82, "target": 14, "avg": 1.6}),
+    (4, None, "fell under 3% on the day", {"n": 2533, "profit": 79, "target": 7, "avg": 0.7}),
+]
 
 
 # ---------------------------------------------------------------- the grade and the order
@@ -104,6 +124,21 @@ def grade(S, i):
         if mom > 0.10 and r < 25:
             return "B", mom, r
     return None, mom, r
+
+
+def rating(S, i):
+    """(rating out of 10, the band's words, its test numbers) for a grade A bar. The deeper the one-day
+    dip, the better the same order did in the test. It rates the odds on the chart, not the news."""
+    ch = S["c"][i] / S["c"][i - 1] - 1.0
+    for score, limit, words, st in RATINGS:
+        if limit is None or ch <= limit:
+            return score, words, st
+
+
+def rating_line(S, i):
+    score, words, st = rating(S, i)
+    return ("RATING %d/10: %s. Of %s filled trades like it in the test, %d%% ended in profit, %d%% reached the full "
+            "target, average %+.1f%% after costs." % (score, words, "{:,}".format(st["n"]), st["profit"], st["target"], st["avg"]))
 
 
 def levels(S, i):
@@ -430,7 +465,7 @@ def cmd_pick(a):
         ok = sw.tradable(S, i)
         facts, lines = read_chart(S, i, N, ni)
         is_a = g == "A" and ok and market_ok
-        verdict = ("GRADE A: the tested setup" if is_a else
+        verdict = ("GRADE A: the tested setup, rated %d/10" % rating(S, i)[0] if is_a else
                    "WATCH (grade B)" if g == "B" and ok and market_ok else "NO ORDER")
         out.append("%s  %s  ->  %s" % (sym, rupees(S["c"][i]), verdict))
         out += ["  " + ln.replace("\n", "\n  ") for ln in lines]
@@ -449,17 +484,18 @@ def cmd_pick(a):
         elif od["qty"] < 1:
             out.append("  Why not   one share at %s costs more than the %s for one order." % (rupees(od["limit_price"]), rupees(money)))
             is_a = False
-        rows.append((is_a, mom or 0, sym, S, i, od))
+        rows.append((is_a, (rating(S, i)[0] if is_a else 0, mom or 0), sym, S, i, od))
         doc_rows.append({"symbol": sym, "grade": g if ok else None, "verdict": verdict, "facts": facts,
                          "history": {k: v for k, v in hist.items() if k != "net"}, "order": od})
-    best = sorted((r for r in rows if r[0]), key=lambda r: -r[1])
+    best = sorted((r for r in rows if r[0]), key=lambda r: r[1], reverse=True)   # best rating, then 3-month gain
     out.append("")
     pick = None
     if best:
         _, mom, sym, S, i, od = best[0]
-        pick = {"symbol": sym, "signal_day": last_day, "trade_day": trade_day, "exit_by": exit_by, "close": S["c"][i], **od}
-        out.append("THE PICK for %s: %s%s" % (wd(trade_day), sym,
-                                             " (the strongest of %d grade A stocks)" % len(best) if len(best) > 1 else ""))
+        pick = {"symbol": sym, "signal_day": last_day, "trade_day": trade_day, "exit_by": exit_by, "close": S["c"][i],
+                "rating": rating(S, i)[0], **od}
+        out.append("THE PICK for %s: %s, rated %d/10%s" % (wd(trade_day), sym, pick["rating"],
+                                                         " (the best rated of %d grade A stocks)" % len(best) if len(best) > 1 else ""))
         out += order_block(sym, S, i, od, trade_day, exit_by)[1:]
         acts = []
         if not a.offline:
@@ -478,9 +514,7 @@ def cmd_pick(a):
         if held:
             out.append("   NOTE    %s was also the pick on %s and that trade may still be open: a second order doubles the"
                        " position in one stock." % (sym, held[-1]["signal_day"]))
-        out.append("   ODDS    in the test, of 100 filled trades run this way about %d ended in profit (most through the"
-                   " fallback, about 20 at the full target) and %d lost; about %d lost more than 3%%. A loss is still possible."
-                   % (ODDS["win"], ODDS["lose"], ODDS["big_loss"]))
+        out.append("   " + rating_line(S, i) + " A loss is still possible.")
         out.append("BEFORE YOU PLACE IT: run the news check in trader-swing/NEWS.md for %s over the 5-session hold"
                    " (results dates, corporate actions, fraud or regulatory news, market events)." % sym)
     else:
@@ -610,6 +644,103 @@ def cmd_follow(a):
     return 0
 
 
+def grade_a_today(a, now, money):
+    """Every grade A stock in the universe at the last complete close, best rating first.
+    -> (rows, last date, market line, charts fetched, symbols asked); rows = (rating, 3-month gain, symbol, series, index, order)."""
+    last = sw.last_complete_day(now)
+    last_day = last.isoformat()
+    if a.offline:
+        data = sw.load_folder(a.offline, last_day)
+        asked = len([s for s in data if not s.startswith("^")])
+        for S in data.values():
+            sw.prepare(S)
+            S["ix"] = {d: i for i, d in enumerate(S["d"])}
+    else:
+        uni = sw.read_universe(a.universe)
+        asked = len(uni)
+        raw = sw.fetch_all(uni + ["^NSEI"], "2y")
+        data = {}
+        for s, d in raw.items():
+            try:
+                data[s] = prepared(d, s, last_day)
+            except SwingError:
+                pass
+    mkt = sw.market_line(data, last_day) if "^NSEI" in data else None
+    rows = []
+    if not (mkt and mkt["below200"]):
+        for s, S in data.items():
+            j = S["ix"].get(last_day)
+            if s.startswith("^") or j is None or j < 260 or not sw.tradable(S, j) or grade(S, j)[0] != "A":
+                continue
+            od = order(S, j, money)
+            if od["qty"] >= 1:
+                rows.append((rating(S, j)[0], grade(S, j)[1], s, S, j, od))
+        rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    return rows, last, mkt, len([s for s in data if not s.startswith("^")]), asked
+
+
+def cmd_scan(a):
+    now = sw.parse_now(a.now)
+    cfg = sw.load_config(a.config)
+    money = pick_money(cfg, a.budget)
+    rows, last, mkt, got, asked = grade_a_today(a, now, money)
+    if not got:
+        raise SwingError("no charts came back from Yahoo: try again in a few minutes")
+    last_day = last.isoformat()
+    trade_day = sw.next_session(last).isoformat()
+    exit_by = sw.next_session(datetime.date.fromisoformat(trade_day), RULE["hold"] - 1).isoformat()
+    hot = [r for r in rows if r[0] >= a.min_rating]
+    out = ["Rating scan, %s IST. Daily bars through %s. %d of %d charts."
+           % (now.strftime("%a %Y-%m-%d %H:%M"), wd(last_day), got, asked)]
+    out.append(("NIFTY 50 closed %s (%+.2f%% on the day), %s its 200-day average."
+                % ("{:,.2f}".format(mkt["close"]), mkt["change"], "BELOW" if mkt["below200"] else "above")) if mkt
+               else "NIFTY 50: no data, so the market filter was NOT checked.")
+    if mkt and mkt["below200"]:
+        out.append("NO ALERT: the market filter is on (NIFTY 50 under its 200-day average), so no stock is a setup today.")
+    elif hot:
+        out.append("ALERT: %d stock%s rated %d/10 or better for %s." % (len(hot), "" if len(hot) == 1 else "s",
+                                                                       a.min_rating, wd(trade_day)))
+    else:
+        out.append("NO ALERT: no stock is rated %d/10 or better for %s." % (a.min_rating, wd(trade_day)))
+    doc_hot = []
+    for score, mom, sym, S, i, od in hot[:a.show]:
+        out.append("")
+        out.append("%s  closed %s, %+.1f%% today, up %.0f%% in 3 months, RSI(2) %.0f"
+                   % (sym, rupees(S["c"][i]), pct(S["c"][i], S["c"][i - 1]), 100 * mom, S["rsi2"][i]))
+        out.append("   " + rating_line(S, i))
+        out += order_block(sym, S, i, od, trade_day, exit_by)[1:]
+        acts = []
+        if not a.offline:
+            try:
+                acts = sw.actions_from_chart(sw.fetch_chart(sym, "3mo", events=True), sw.session_days(last, 4)[0])
+            except SwingError:
+                acts = ["could not read corporate actions from Yahoo: check them by hand"]
+        fl = sw.data_flags(S, i, mkt, acts)["flags"]
+        for x in fl:
+            out.append("   CHECK   " + x)
+        doc_hot.append({"symbol": sym, "rating": score, "close": S["c"][i], "flags": fl, **od})
+    rest = [r for r in rows if r[0] < a.min_rating]
+    if rest:
+        out.append("")
+        out.append("Lower rated today (no alert): " + ", ".join(
+            "%s %d/10 (%s, %+.1f%% today)" % (sym.replace(".NS", ""), score, rupees(S["c"][i]), pct(S["c"][i], S["c"][i - 1]))
+            for score, mom, sym, S, i, od in rest[:12]))
+    if hot:
+        out.append("")
+        out.append("BEFORE ANY ORDER: a fall this sharp has a reason. Run the news check in trader-swing/NEWS.md on each"
+                   " alert over the 5-session hold. A rating is the chart's odds, not the news.")
+    out.append("About 1 filled trade in 10 still lost at the top rating, more at lower ones. Nothing was placed. Not financial advice.")
+    doc = {"created_by": "trader-pick", "created_at": now.strftime("%Y-%m-%dT%H:%M:%S+05:30"), "signal_day": last_day,
+           "trade_day": trade_day, "min_rating": a.min_rating, "market": mkt, "alerts": doc_hot,
+           "grade_a": [{"symbol": sym, "rating": score, "close": S["c"][i]} for score, mom, sym, S, i, od in rows]}
+    print(json.dumps(doc, indent=1, ensure_ascii=False) if a.json else "\n".join(out))
+    if not a.no_write:
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        with open(a.out, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, indent=1, ensure_ascii=False)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Pick of the day from the stocks you name (trader-pick).")
     sub = ap.add_subparsers(dest="cmd")
@@ -626,7 +757,14 @@ def main(argv=None):
     f.add_argument("--signal-day")
     f.add_argument("--qty", type=int)
     f.add_argument("--last", type=int, default=10, help="how many journal picks to show")
-    for q in (p, f):
+    c = sub.add_parser("scan", help="rate every grade A stock in the universe; alert on the best")
+    c.add_argument("--min-rating", type=int, default=7)
+    c.add_argument("--universe", default="trader/universe.txt")
+    c.add_argument("--show", type=int, default=3)
+    c.add_argument("--out", default="trader/pick_scan.json")
+    c.add_argument("--no-write", action="store_true")
+    c.add_argument("--json", action="store_true")
+    for q in (p, f, c):
         q.add_argument("--config", default="trader/config.json")
         q.add_argument("--budget", type=float)
         q.add_argument("--journal", default=JOURNAL)
@@ -638,6 +776,8 @@ def main(argv=None):
             return cmd_pick(a)
         if a.cmd == "follow":
             return cmd_follow(a)
+        if a.cmd == "scan":
+            return cmd_scan(a)
         ap.print_help()
         return 1
     except SwingError as e:

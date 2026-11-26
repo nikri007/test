@@ -29,6 +29,7 @@ order.
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/pick.py" pick RELIANCE TCS INFY   # after 3:45 PM IST
 python3 "${CLAUDE_SKILL_DIR}/pick.py" pick SUNTV --no-scan     # without the NIFTY 500 list
+python3 "${CLAUDE_SKILL_DIR}/pick.py" scan                     # rate every setup in the universe; ALERT at 7/10 or better
 python3 "${CLAUDE_SKILL_DIR}/pick.py" follow                   # the picks in trader/picks.json
 python3 "${CLAUDE_SKILL_DIR}/pick.py" follow SUNTV --signal-day 2026-11-25 --qty 12
 ```
@@ -76,8 +77,29 @@ So the reading is shown in full and one picture earns an order.
 | WATCH (grade B) | the same shape, weaker: up more than 10%, RSI(2) under 25. No order: about +0.5% a trade before 2025, nothing in the last year |
 | NO ORDER | anything else, with the reason ("no dip yet", "under its 50-day average", "market filter") |
 
-With several grade A stocks, the pick is the one with the strongest 3-month
-gain. One pick a day at most.
+## The rating
+
+A grade A setup is rated out of 10 by how hard the stock fell on the signal
+day. The same order did better the deeper the dip, in every period (filled
+trades, after costs):
+
+| rating | fall on the signal day | trades | in profit | at the full target | average |
+| --- | --- | --- | --- | --- | --- |
+| 7/10 | 7% or more | 153 | 90% | 48% | +5.0% |
+| 6/10 | 5 to 7% | 308 | 83% | 16% | +1.9% |
+| 5/10 | 3 to 5% | 1,014 | 82% | 14% | +1.6% |
+| 4/10 | under 3% | 2,533 | 79% | 7% | +0.7% |
+
+A 7 is rare: about 2 or 3 a month across 495 stocks, mostly on days the
+market sells off. A fall that sharp always has a reason, so the news check
+matters most exactly when the rating is highest. The rating is the chart's
+odds; it says nothing about the news. Nothing rates above 7.
+
+`pick.py scan` rates every grade A stock in `trader/universe.txt` and prints
+ALERT with the full order when one is rated 7 or better (`--min-rating`).
+
+With several grade A stocks, the pick is the best rated, then the strongest
+3-month gain. One pick a day at most.
 
 ## The order
 
@@ -138,6 +160,8 @@ stop. `pick.py follow` says when the fallback is on and at what price.
 
 ## Rules
 
+- Give the rating with its numbers, never alone, and never raise it because
+  the user wants a 7. If nothing is rated 7, say so.
 - Never say a target or a profit is certain, and never say the fallback means
   "no loss". Say the odds: about 80 in 100 filled trades ended in profit and
   20 lost in the test.

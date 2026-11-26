@@ -64,6 +64,23 @@ class Grade(unittest.TestCase):
         self.assertIn("grade B", pk.what_is_missing(S, 301, "B", 0.12, 20.0, True))
 
 
+class Rating(unittest.TestCase):
+    def one(self, fall):
+        c = rising()
+        return pk.rating(series(c + [c[-1] * (1 - fall)]), 300)
+
+    def test_the_deeper_the_dip_the_higher_the_rating(self):
+        self.assertEqual([self.one(f)[0] for f in (0.09, 0.07, 0.06, 0.04, 0.02, 0.0)], [7, 7, 6, 5, 4, 4])
+        score, words, st = self.one(0.09)
+        self.assertEqual((words, st["profit"], st["target"]), ("fell 7% or more on the day", 90, 48))
+
+    def test_the_rating_line_gives_the_test_numbers(self):
+        c = rising()
+        line = pk.rating_line(series(c + [c[-1] * 0.98]), 300)
+        self.assertTrue(line.startswith("RATING 4/10: fell under 3% on the day."))
+        self.assertIn("79% ended in profit, 7% reached the full target, average +0.7%", line)
+
+
 class Order(unittest.TestCase):
     def test_levels_are_clamped_to_the_tested_ranges(self):
         calm = series(rising(), wiggle=0.002)             # a tiny ATR: the floors apply
