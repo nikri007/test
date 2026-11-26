@@ -497,7 +497,7 @@ def cmd_pick(a):
                 except SwingError:
                     continue
                 j = U["ix"].get(last_day)
-                if j is not None and sw.tradable(U, j) and grade(U, j)[0] == "A":
+                if j is not None and j >= 260 and sw.tradable(U, j) and grade(U, j)[0] == "A":   # 260: enough for a full reading
                     od = order(U, j, money)
                     if od["qty"] >= 1:
                         others.append((grade(U, j)[1], s, U["c"][j], od["limit_price"]))
